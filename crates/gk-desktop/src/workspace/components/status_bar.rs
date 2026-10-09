@@ -44,13 +44,23 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
 /// One-line clipped status message; hovering reveals the full text in a
 /// HoverCard.
 fn clipped_message(id: &'static str, text: SharedString, color: Hsla) -> HoverCard {
+    // git output carries explicit line breaks; whitespace_nowrap / truncate
+    // never cut a '\n', so the trigger gets a whitespace-collapsed copy while
+    // the hover card renders the original text.
+    let one_line: SharedString = text.split_whitespace().collect::<Vec<_>>().join(" ").into();
+
     HoverCard::new(id)
         // Open above the trigger: the bar sits at the bottom of the window.
         .anchor(Anchor::BottomLeft)
         .open_delay(Duration::from_millis(300))
         .close_delay(Duration::from_millis(150))
-        .trigger(
-            div().min_w_0().whitespace_nowrap().truncate().text_color(color).child(text.clone()),
+        .trigger(div().min_w_0().whitespace_nowrap().truncate().text_color(color).child(one_line))
+        .child(
+            div()
+                .max_w(px(560.))
+                .whitespace_normal()
+                .line_height(relative(1.4))
+                .text_color(color)
+                .child(text),
         )
-        .child(div().max_w(px(560.)).whitespace_normal().text_color(color).child(text))
 }
