@@ -459,6 +459,97 @@ impl Workspace {
         })
         .detach();
     }
+
+    // ---- app launchers (IDE / terminal) ---------------------------------
+
+    /// Open the repository in Zed; falls back to the system `open -a Zed`
+    /// when the `zed` CLI is not on PATH.
+    pub(crate) fn open_in_ide(&mut self, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let path = repo.path.to_string_lossy().into_owned();
+        let job = cx.background_spawn(async move {
+            try_open(&[
+                ("zed".to_string(), vec![path.clone()]),
+                ("open".to_string(), vec!["-a".to_string(), "Zed".to_string(), path]),
+            ])
+        });
+        self.run_launcher("ide", job, cx);
+    }
+
+    /// Open the repository in a Warp terminal; Warp is driven through its
+    /// `warp://` deep link (new tab with the repo path), with the plain
+    /// `open -a Warp <path>` launch as fallback.
+    pub(crate) fn open_in_terminal(&mut self, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let path = repo.path.to_string_lossy().into_owned();
+        // Basic percent-encoding for the URL scheme (space only is realistic).
+        let encoded = path.replace(' ', "%20");
+        let job = cx.background_spawn(async move {
+            try_open(&[
+                ("open".to_string(), vec![format!("warp://action/new_tab?path={encoded}")]),
+                ("open".to_string(), vec!["-a".to_string(), "Warp".to_string(), path]),
+            ])
+        });
+        self.run_launcher("terminal", job, cx);
+    }
+
+    /// Shared completion handling for launcher jobs: busy flag + status bar
+    /// message (error surfaces the failed command), no repo refresh.
+    fn run_launcher(
+        &mut self,
+        label: &'static str,
+        job: Task<Result<(), String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        self.remote_busy = Some(label);
+        self.info = None;
+        self.error = None;
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                this.remote_busy = None;
+                match result {
+                    Ok(()) => {
+                        this.info = Some(format!("{label}: ok").into());
+                        cx.notify();
+                    }
+                    Err(e) => {
+                        this.error = Some(e.into());
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
+/// Run each candidate launcher command until one exits successfully; the
+/// returned `Err` carries the last failure. Commands run detached from the
+/// UI on the background executor.
+fn try_open(commands: &[(String, Vec<String>)]) -> Result<(), String> {
+    let mut last = String::from("no launcher available");
+    for (program, args) in commands {
+        match std::process::Command::new(program).args(args).output() {
+            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                last = if stderr.is_empty() {
+                    format!("{program} failed with {}", out.status)
+                } else {
+                    format!("{program}: {stderr}")
+                };
+            }
+            Err(e) => last = format!("{program}: {e}"),
+        }
+    }
+    Err(last)
 }
 
 impl Workspace {

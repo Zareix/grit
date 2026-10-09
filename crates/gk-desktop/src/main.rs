@@ -16,7 +16,7 @@ use crate::session::Session;
 // fallback below.
 icon_assets!(
     ExtraIcons,
-    [ArrowDown, ArrowUp, CloudDownload, EllipsisVertical, FileCode, GitCommitHorizontal]
+    [ArrowDown, ArrowUp, CloudDownload, Code, EllipsisVertical, FileCode, GitCommitHorizontal]
 );
 
 /// Composite asset source: app icons first, then the default component set.

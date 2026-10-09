@@ -45,6 +45,34 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .child(remote_button("pull", "Pull", IconName::ArrowDown, RemoteOp::Pull, ws, cx))
                 .child(remote_button("push", "Push", IconName::ArrowUp, RemoteOp::Push, ws, cx)),
         )
+        // app launchers, next to the remote group: IDE + terminal
+        .child(
+            h_flex()
+                .gap_1()
+                .border_l_1()
+                .border_color(border.opacity(0.6))
+                .pl_2()
+                .child(
+                    Button::new("open-ide")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Code)
+                        .label("IDE")
+                        .loading(ws.remote_busy == Some("ide"))
+                        .disabled(ws.remote_busy.is_some())
+                        .on_click(cx.listener(|this, _, _, cx| this.open_in_ide(cx))),
+                )
+                .child(
+                    Button::new("open-terminal")
+                        .ghost()
+                        .small()
+                        .icon(IconName::SquareTerminal)
+                        .label("Terminal")
+                        .loading(ws.remote_busy == Some("terminal"))
+                        .disabled(ws.remote_busy.is_some())
+                        .on_click(cx.listener(|this, _, _, cx| this.open_in_terminal(cx))),
+                ),
+        )
         .child(div().flex_1())
         .child(
             Button::new("refresh")
