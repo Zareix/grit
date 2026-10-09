@@ -6,7 +6,7 @@ members = ["crates/gk-core", "crates/gk-desktop"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-authors = ["Raphael Goncalves"]
+authors = ["Raphaël C."]
 
 [workspace.dependencies]
 git2 = "0.21"
