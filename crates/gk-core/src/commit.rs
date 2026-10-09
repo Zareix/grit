@@ -71,6 +71,32 @@ impl Repo {
         Ok(Some(self.find_commit(commit.id())?))
     }
 
+    /// Recent commits reachable from an arbitrary ref ("main", "origin/x"),
+    /// newest first. Walk without first-parent simplification so merges show
+    /// up in order.
+    pub fn commit_log_ref(&self, refname: &str, limit: usize) -> Result<Vec<Commit>> {
+        let repo = self.git2()?;
+        let oid = repo.revparse_single(refname)?.id();
+
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push(oid)?;
+        revwalk.set_sorting(git2::Sort::TIME)?;
+
+        let mut out = Vec::with_capacity(limit.min(64));
+        for oid in revwalk.take(limit) {
+            let c = repo.find_commit(oid?)?;
+            out.push(Commit {
+                id: c.id(),
+                summary: c.summary().ok().flatten().unwrap_or_default().to_owned(),
+                message: c.message().ok().map(str::to_owned),
+                author: signature_to_owned(c.author(), c.time()),
+                committer: signature_to_owned(c.committer(), c.time()),
+                parents: c.parent_ids().collect(),
+            })
+        }
+        Ok(out)
+    }
+
     /// Recent commits, newest first (order is git's default: reverse chrono).
     pub fn commit_log(&self, limit: usize) -> Result<Vec<Commit>> {
         let repo = self.git2()?;

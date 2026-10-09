@@ -57,8 +57,6 @@ fn remote_button(
     cx: &mut Context<Workspace>,
 ) -> Button {
     Button::new(id)
-        .ghost()
-        .small()
         .icon(icon)
         .label(label)
         .loading(ws.remote_busy == Some(id))

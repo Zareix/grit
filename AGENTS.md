@@ -53,6 +53,15 @@ just check       # fast cargo check
   contiguously with uniform height (no gap support). Item width is
   content-based (`ListHorizontalSizingBehavior::FitList` by default) — add
   `.w_full()` on each row so it fills the list and `flex_1` works.
+- Menus (0.7.1): the `PopupMenu` is **provided** by the builder closure
+  (`dropdown_menu(move |menu, _, _| …)`) — do not construct one; the site docs
+  show a `PopupMenu::new` that does not exist publicly. Items: prefer
+  `menu.item(PopupMenuItem::new(label).icon(…).disabled(…).on_click(|ev, window, cx| …))`
+  (closures capture a captured `WeakEntity`) over action-based `menu(label,
+  Box<dyn Action>)` unless you already have GPUI actions. Right-click:
+  `row.context_menu(builder)` wraps the element (extra `ContextMenu<…>` wrapper
+  return type). Hover-reveal buttons: `.group("row")` on the container +
+  `.opacity(0.).group_hover("row", |s| s.opacity(1.))` on the trigger.
 - **Never invent APIs** — check the installed crate source; the
   `.agents/skills/gpui-kit` catalog describes a newer ecosystem than 0.7.1
   (e.g. the `Diff` component does not exist in 0.7.1; `h_resizable(id)` takes

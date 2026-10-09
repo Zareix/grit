@@ -43,6 +43,31 @@ fn checkout_switches_head() {
 }
 
 #[test]
+fn commit_log_ref_walks_any_branch() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("c1");
+    t.repo.create_branch("feature").unwrap();
+    t.repo.checkout_branch("feature").unwrap();
+    t.write_and_stage("feature-only.txt", "feats");
+    let feature_tip = t.commit("on feature");
+    t.repo.checkout_branch("main").unwrap();
+    t.write_and_stage("main-only.txt", "main");
+    let main_tip = t.commit("on main");
+
+    let feature_log = t.repo.commit_log_ref("feature", 10).unwrap();
+    assert_eq!(feature_log[0].id, feature_tip, "feature log goes to its tip");
+    assert!(feature_log.iter().any(|c| c.summary == "c1"));
+
+    let main_log = t.repo.commit_log_ref("main", 10).unwrap();
+    assert_eq!(main_log[0].id, main_tip);
+    assert!(
+        !main_log.iter().any(|c| c.summary == "on feature"),
+        "main must not include feature commits"
+    );
+}
+
+#[test]
 fn delete_branch_guards_current() {
     let t = TestRepo::new();
     t.write_and_stage("a.txt", "1");

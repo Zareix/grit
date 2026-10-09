@@ -46,6 +46,10 @@ pub struct Workspace {
     remote_busy: Option<&'static str>,
     /// Transient success/info message for the status bar.
     info: Option<SharedString>,
+    /// Branch whose history is shown in the center column (None = HEAD).
+    viewed_branch: Option<SharedString>,
+    /// Log of `viewed_branch`, refreshed along with `status`.
+    branch_log: Vec<Commit>,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
@@ -84,6 +88,8 @@ impl Workspace {
             center_layout,
             remote_busy: None,
             info: None,
+            viewed_branch: None,
+            branch_log: Vec::new(),
             error: None,
             _subscriptions: vec![enter_subscription],
         };
@@ -124,6 +130,7 @@ impl Workspace {
                 self.current_branch = current;
                 self.log = log;
                 self.error = None;
+                self.sync_viewed_branch(&repo);
                 self.sync_selection(&repo);
             }
             _ => {
@@ -131,6 +138,41 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Re-read the branch log of the viewed branch; stop viewing branches
+    /// that no longer exist.
+    fn sync_viewed_branch(&mut self, repo: &Repo) {
+        let Some(name) = self.viewed_branch.clone() else {
+            return;
+        };
+        match repo.commit_log_ref(&name, MAX_LOG_COMMITS) {
+            Ok(log) => self.branch_log = log,
+            Err(_) => {
+                self.viewed_branch = None;
+                self.branch_log.clear();
+            }
+        }
+    }
+
+    /// Click on a branch: show its history without checking it out. Clicking
+    /// the same branch again goes back to the current branch's history.
+    fn view_branch(&mut self, name: &str, cx: &mut Context<Self>) {
+        if self.viewed_branch.as_deref() == Some(name) {
+            self.view_branch_current(cx);
+        } else if let Some(repo) = self.repo.clone() {
+            self.viewed_branch = Some(name.to_string().into());
+            self.branch_log =
+                repo.commit_log_ref(name, MAX_LOG_COMMITS).unwrap_or_else(|_| self.log.clone());
+        }
+        cx.notify();
+    }
+
+    /// Return the center column to the current branch's history (HEAD).
+    fn view_branch_current(&mut self, cx: &mut Context<Self>) {
+        if self.viewed_branch.take().is_some() {
+            cx.notify();
+        }
     }
 
     /// Re-read the selected file's diff after the status changed; drop the
@@ -303,75 +345,76 @@ impl Workspace {
         };
 
         if branch.upstream.is_none() {
-            // Ask the user before creating the remote branch.
-            match self.repo.as_ref().map(gk_core::Repo::remotes) {
-                Some(Ok(remotes)) if !remotes.is_empty() => {
-                    let remote = remotes.first().cloned().expect("non-empty remotes");
-                    let branch_name = branch.name.clone();
-                    let weak = cx.entity().downgrade();
-                    window.open_dialog(cx, move |dialog, _, dialog_cx| {
-                        dialog
-                            .title("Set upstream branch?")
-                            .child(
-                                v_flex()
-                                    .gap_2()
-                                    .child(format!(
-                                        "\"{}\" does not track a remote branch yet.",
-                                        branch_name
-                                    ))
-                                    .child(
-                                        div()
-                                            .text_color(dialog_cx.theme().muted_foreground)
-                                            .child(format!(
-                                                "Publish it as {remote}/{branch_name} and set it as upstream?"
-                                            )),
-                                    ),
-                            )
-                            // 0.7.1: footer takes a value, the styled OK/Cancel
-                            // buttons from button_props are only rendered by
-                            // AlertDialog — build ours explicitly.
-                            .footer(
-                                DialogFooter::new()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("cancel")
-                                            .label("Cancel")
-                                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                                    )
-                                    .child(
-                                        Button::new("confirm")
-                                            .primary()
-                                            .label("Push and set upstream")
-                                            .on_click({
-                                                let weak = weak.clone();
-                                                let remote = remote.clone();
-                                                let branch_name = branch_name.clone();
-                                                move |_, window, cx| {
-                                                    window.close_dialog(cx);
-                                                    weak.update(cx, |ws, cx| {
-                                                        ws.set_upstream_and_push(
-                                                            remote.clone(),
-                                                            branch_name.clone(),
-                                                            cx,
-                                                        )
-                                                    })
-                                                    .ok();
-                                                }
-                                            }),
-                                    ),
-                            )
-                    });
-                    return;
-                }
-                _ => {
-                    self.error = Some("Cannot push: no remote configured".into());
-                    cx.notify();
-                    return;
-                }
-            }
+            self.open_upstream_dialog(&branch.name, window, cx);
+            return;
         }
 
         self.run_remote(gk_core::remote::RemoteOp::Push, cx);
+    }
+
+    /// Dialog asking to publish a branch as `<remote>/<branch>` and set it as
+    /// upstream (`push --set-upstream`).
+    fn open_upstream_dialog(
+        &mut self,
+        branch_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let remotes = match self.repo.as_ref().map(gk_core::Repo::remotes) {
+            Some(Ok(remotes)) if !remotes.is_empty() => remotes,
+            _ => {
+                self.error = Some("Cannot set upstream: no remote configured".into());
+                cx.notify();
+                return;
+            }
+        };
+        let remote = remotes.first().cloned().expect("non-empty remotes");
+        let branch_name = branch_name.to_string();
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, dialog_cx| {
+            dialog
+                .title("Set upstream branch?")
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(format!("\"{}\" does not track a remote branch yet.", branch_name))
+                        .child(div().text_color(dialog_cx.theme().muted_foreground).child(
+                            format!("Publish it as {remote}/{branch_name} and set it as upstream?"),
+                        )),
+                )
+                // 0.7.1: footer takes a value; the styled OK/Cancel buttons from
+                // button_props are only rendered by AlertDialog — build ours.
+                .footer(
+                    DialogFooter::new()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("confirm")
+                                .primary()
+                                .label("Push and set upstream")
+                                .on_click({
+                                    let weak = weak.clone();
+                                    let remote = remote.clone();
+                                    let branch_name = branch_name.clone();
+                                    move |_, window, cx| {
+                                        window.close_dialog(cx);
+                                        weak.update(cx, |ws, cx| {
+                                            ws.set_upstream_and_push(
+                                                remote.clone(),
+                                                branch_name.clone(),
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                    }
+                                }),
+                        ),
+                )
+        });
     }
 
     /// Created by the set-upstream dialog: push with `--set-upstream`.

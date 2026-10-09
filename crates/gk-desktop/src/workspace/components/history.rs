@@ -1,6 +1,7 @@
 //! Center column: commit history list.
 
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::workspace::Workspace;
@@ -10,7 +11,11 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let foreground = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
 
-    let log_rows = ws.log.iter().map(|c| {
+    // Viewing a branch's history shows its own log; otherwise HEAD's log.
+    let log: &[gk_core::commit::Commit] =
+        if ws.viewed_branch.is_some() { &ws.branch_log } else { &ws.log };
+
+    let log_rows = log.iter().map(|c| {
         let short_id = c.id.to_string().chars().take(7).collect::<String>();
         h_flex()
             .w_full()
@@ -44,20 +49,34 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .border_color(border)
                 .child(
                     h_flex()
+                        .min_w_0()
+                        .gap_2()
+                        .items_center()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(muted)
-                        .child("History"),
+                        .child("History")
+                        // branch chip when viewing a specific branch
+                        .when_some(ws.viewed_branch.clone(), |this, name| {
+                            this.child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_color(cx.theme().info)
+                                    .child(name),
+                            )
+                        }),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
                         .text_color(muted)
-                        .child(format!("{} commits", ws.log.len())),
+                        .child(format!("{} commits", log.len())),
                 ),
         )
         .child(div().id("commit-log").flex_1().min_h_0().overflow_y_scroll().children(
-            if ws.log.is_empty() {
+            if log.is_empty() {
                 vec![
                     div()
                         .flex()
