@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/gk-core", "crates/gk-desktop"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Raphael Goncalves"]
+
+[workspace.dependencies]
+git2 = "0.21"
+anyhow = "1"
+thiserror = "2"
+
+# UI
+gpui-kit = "0.7.1"
+
+# internal
+gk-core = { path = "crates/gk-core" }
+
+[profile.dev.package.git2]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

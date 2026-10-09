@@ -1,0 +1,3 @@
+[toolchain]
+# GPUI requires nightly (uses unstable std features like `cold_path`).
+channel = "nightly"
