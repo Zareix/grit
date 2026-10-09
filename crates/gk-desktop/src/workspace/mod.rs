@@ -6,7 +6,12 @@ mod components;
 
 use std::path::PathBuf;
 
-use gk_core::{Repo, branch::Branch, commit::Commit, status::Status};
+use gk_core::{
+    Oid, Repo,
+    branch::Branch,
+    commit::Commit,
+    status::{FileEntry, Status},
+};
 use gpui_kit::component::{
     ActiveTheme as _, ResizableState, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -17,7 +22,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use self::components::{branches, diff_view, history, staging, status_bar, toolbar};
+use self::components::{
+    branches, commit_details, diff_view, history, staging, status_bar, toolbar,
+};
 
 const MAX_LOG_COMMITS: usize = 500;
 
@@ -50,6 +57,13 @@ pub struct Workspace {
     viewed_branch: Option<SharedString>,
     /// Log of `viewed_branch`, refreshed along with `status`.
     branch_log: Vec<Commit>,
+    /// Commit selected in the history (its details replace the staging panel).
+    selected_commit: Option<Commit>,
+    /// Files changed by the selected commit.
+    commit_files: Vec<FileEntry>,
+    /// Whether `selected_path`'s diff comes from the selected commit (rather
+    /// than the worktree).
+    diff_from_commit: bool,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
@@ -90,6 +104,9 @@ impl Workspace {
             info: None,
             viewed_branch: None,
             branch_log: Vec::new(),
+            selected_commit: None,
+            commit_files: Vec::new(),
+            diff_from_commit: false,
             error: None,
             _subscriptions: vec![enter_subscription],
         };
@@ -156,9 +173,11 @@ impl Workspace {
     }
 
     /// Click on a branch: show its history without checking it out. Clicking
-    /// the same branch again goes back to the current branch's history.
+    /// the current branch (or the already-viewed one) goes back to the
+    /// default view of the current branch's history.
     fn view_branch(&mut self, name: &str, cx: &mut Context<Self>) {
-        if self.viewed_branch.as_deref() == Some(name) {
+        let is_current = self.current_branch.as_ref().is_some_and(|c| c.name == name);
+        if is_current || self.viewed_branch.as_deref() == Some(name) {
             self.view_branch_current(cx);
         } else if let Some(repo) = self.repo.clone() {
             self.viewed_branch = Some(name.to_string().into());
@@ -181,11 +200,34 @@ impl Workspace {
         let Some(sel) = self.selected_path.clone() else {
             return;
         };
+
+        // Diff of a file as changed by the selected commit.
+        if let Some(commit) = self.selected_commit.clone() {
+            if self.commit_files.iter().any(|f| f.path == sel) {
+                self.diff_from_commit = true;
+                self.selected_staged = false;
+                let result = repo.commit_file_diff(commit.id, &sel);
+                self.diff_text = result.unwrap_or_else(|e| {
+                    self.error = Some(e.to_string().into());
+                    String::new()
+                });
+                return;
+            }
+            // File no longer part of the commit view: clear it.
+            self.selected_path = None;
+            self.selected_staged = false;
+            self.diff_from_commit = false;
+            self.diff_text.clear();
+            return;
+        }
+
+        // Worktree diff of a staged/unstaged file.
         let staged = self.status.staged.iter().any(|f| f.path == sel);
         let present = staged || self.status.unstaged.iter().any(|f| f.path == sel);
 
         if present {
             self.selected_staged = staged;
+            self.diff_from_commit = false;
             let result = if staged { repo.diff_staged(&sel) } else { repo.diff_unstaged(&sel) };
             self.diff_text = result.unwrap_or_else(|e| {
                 self.error = Some(e.to_string().into());
@@ -194,6 +236,7 @@ impl Workspace {
         } else {
             self.selected_path = None;
             self.selected_staged = false;
+            self.diff_from_commit = false;
             self.diff_text.clear();
         }
     }
@@ -203,7 +246,24 @@ impl Workspace {
         let Some(repo) = self.repo.clone() else { return };
         self.selected_path = Some(path.clone());
         self.selected_staged = staged;
+        self.diff_from_commit = false;
         let result = if staged { repo.diff_staged(&path) } else { repo.diff_unstaged(&path) };
+        self.diff_text = result.unwrap_or_else(|e| {
+            self.error = Some(e.to_string().into());
+            String::new()
+        });
+        cx.notify();
+    }
+
+    /// Click on a changed file inside the commit details view: show that
+    /// file's diff extracted from the selected commit.
+    fn select_commit_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(commit) = self.selected_commit.clone() else { return };
+        let Some(repo) = self.repo.clone() else { return };
+        self.selected_path = Some(path.clone());
+        self.selected_staged = false;
+        self.diff_from_commit = true;
+        let result = repo.commit_file_diff(commit.id, &path);
         self.diff_text = result.unwrap_or_else(|e| {
             self.error = Some(e.to_string().into());
             String::new()
@@ -214,8 +274,49 @@ impl Workspace {
     fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.selected_path = None;
         self.selected_staged = false;
+        self.diff_from_commit = false;
         self.diff_text.clear();
         cx.notify();
+    }
+
+    /// Click on a history row: show the commit's details on the right,
+    /// replacing the staging panel. Click on the WIP row or the ✕ goes back.
+    fn select_commit(&mut self, oid: Oid, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let commit = match repo.find_commit(oid) {
+            Ok(commit) => commit,
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+                return;
+            }
+        };
+        match repo.commit_changed_files(oid) {
+            Ok(files) => {
+                self.selected_commit = Some(commit);
+                self.commit_files = files;
+                self.selected_path = None;
+                self.selected_staged = false;
+                self.diff_from_commit = false;
+                self.diff_text.clear();
+            }
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+            }
+        }
+        cx.notify();
+    }
+
+    /// Back from the commit details view to the staging panel.
+    fn close_commit(&mut self, cx: &mut Context<Self>) {
+        if self.selected_commit.take().is_some() {
+            self.commit_files.clear();
+            self.selected_path = None;
+            self.selected_staged = false;
+            self.diff_from_commit = false;
+            self.diff_text.clear();
+            cx.notify();
+        }
     }
 
     /// Click on a staged file unstages it; on an unstaged file stages it.
@@ -501,10 +602,12 @@ impl Render for Workspace {
                                 ),
                         )
                         .child(
-                            resizable_panel()
-                                .size(px(340.))
-                                .size_range(px(240.)..px(520.))
-                                .child(staging::render(self, cx)),
+                            resizable_panel().size(px(340.)).size_range(px(240.)..px(520.)).child(
+                                match self.selected_commit.clone() {
+                                    Some(_) => commit_details::render(self, cx),
+                                    None => staging::render(self, cx),
+                                },
+                            ),
                         ),
                 ),
             )

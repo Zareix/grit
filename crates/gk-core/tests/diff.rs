@@ -3,6 +3,26 @@ mod support;
 use support::TestRepo;
 
 #[test]
+fn commit_changed_files_and_file_diff() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "hello");
+    t.commit("c1");
+    t.write_and_stage("b/new.txt", "brand");
+    t.write_and_stage("a.txt", "hello!");
+    std::fs::remove_file(t.repo.path.join("a.txt")).ok();
+    let oid = t.commit("c2");
+
+    let files = t.repo.commit_changed_files(oid).unwrap();
+    let paths: Vec<_> = files.iter().map(|f| f.path.to_string_lossy().into_owned()).collect();
+    assert!(paths.contains(&"b/new.txt".to_string()));
+    assert!(paths.contains(&"a.txt".to_string()));
+
+    let patch = t.repo.commit_file_diff(oid, "b/new.txt").unwrap();
+    assert!(patch.contains("+brand"), "{patch}");
+    assert!(!patch.contains("a.txt"), "patch must be scoped:\n{patch}");
+}
+
+#[test]
 fn diff_unstaged_shows_changes() {
     let t = TestRepo::new();
     t.write_and_stage("a.txt", "hello");

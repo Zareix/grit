@@ -12,26 +12,72 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let muted = cx.theme().muted_foreground;
 
     // Viewing a branch's history shows its own log; otherwise HEAD's log.
-    let log: &[gk_core::commit::Commit] =
-        if ws.viewed_branch.is_some() { &ws.branch_log } else { &ws.log };
+    // Only the current branch's history carries the WIP row (staging is what
+    // HEAD points at).
+    let viewing_other = ws.viewed_branch.is_some();
+    let log: &[gk_core::commit::Commit] = if viewing_other { &ws.branch_log } else { &ws.log };
+
+    let wip_row = h_flex()
+        .id("wip-row")
+        .w_full()
+        .h_7()
+        .flex_none()
+        .px_3()
+        .gap_3()
+        .items_center()
+        .border_b_1()
+        .border_color(border.opacity(0.5))
+        .text_size(px(12.))
+        .font_family(cx.theme().mono_font_family.clone())
+        .when(ws.selected_commit.is_none(), |this| this.bg(cx.theme().accent.opacity(0.3)))
+        .when(ws.selected_commit.is_some(), |this| {
+            this.cursor_pointer().hover(|style| style.bg(border.opacity(0.4)))
+        })
+        .on_click(cx.listener(|this, _, _, cx| this.close_commit(cx)))
+        .child(div().flex_1().min_w_0().truncate().text_color(cx.theme().info).child("// WIP"))
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(11.))
+                .text_color(muted)
+                .child(format!("{} staged", ws.status.staged.len())),
+        );
 
     let log_rows = log.iter().map(|c| {
         let short_id = c.id.to_string().chars().take(7).collect::<String>();
+        let oid = c.id;
+        let is_selected = ws.selected_commit.as_ref().is_some_and(|sel| sel.id == oid);
         h_flex()
+            .id(SharedString::from(format!("commit-{oid}")))
             .w_full()
+            .h_7()
+            .flex_none()
             .px_3()
-            .py_1()
             .gap_3()
             .items_center()
             .border_b_1()
             .border_color(border.opacity(0.5))
             .text_size(px(12.))
+            .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.3)))
+            .when(!is_selected, |this| {
+                this.cursor_pointer().hover(|style| style.bg(border.opacity(0.4)))
+            })
+            .on_click(cx.listener(move |this, _, _, cx| this.select_commit(oid, cx)))
             .child(div().flex_none().w_16().text_size(px(11.)).text_color(muted).child(short_id))
             .child(
                 div().flex_1().min_w_0().truncate().text_color(foreground).child(c.summary.clone()),
             )
             .child(
-                div().flex_none().text_size(px(11.)).text_color(muted).child(c.author.name.clone()),
+                div()
+                    .flex_none()
+                    .w_20()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(muted)
+                    .child(c.author.name.clone()),
+            )
+            .child(
+                div().flex_none().text_size(px(11.)).text_color(muted).child(c.author.date_time()),
             )
     });
 
@@ -84,10 +130,17 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                         .py_8()
                         .text_sm()
                         .text_color(muted)
-                        .child("No commits yet"),
+                        .child("No commits yet")
+                        .into_any_element(),
                 ]
+            } else if viewing_other {
+                // Viewing another branch: no WIP (staging belongs to the
+                // checked-out branch).
+                log_rows.map(|r| r.into_any_element()).collect()
             } else {
-                log_rows.collect()
+                let mut children = vec![wip_row.into_any_element()];
+                children.extend(log_rows.map(|r| r.into_any_element()));
+                children
             },
         ))
 }

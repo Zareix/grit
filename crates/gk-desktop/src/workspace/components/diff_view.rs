@@ -44,7 +44,19 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_string_lossy().into_owned());
-    let source = if ws.selected_staged { "staged" } else { "unstaged" };
+    let source = if ws.diff_from_commit {
+        match &ws.selected_commit {
+            Some(commit) => {
+                let short = commit.id.to_string().chars().take(7).collect::<String>();
+                format!("in {short}")
+            }
+            None => "commit".to_string(),
+        }
+    } else if ws.selected_staged {
+        "staged".to_string()
+    } else {
+        "unstaged".to_string()
+    };
 
     let lines = parse_patch(&ws.diff_text);
 

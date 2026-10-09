@@ -12,7 +12,10 @@ use crate::workspace::Workspace;
 // `Assets` source (which keeps only the 101 legacy component icons).
 // Icons already in the default set resolve through the `ComponentAssets`
 // fallback below.
-icon_assets!(ExtraIcons, [ArrowDown, ArrowUp, CloudDownload, EllipsisVertical, FileCode]);
+icon_assets!(
+    ExtraIcons,
+    [ArrowDown, ArrowUp, CloudDownload, EllipsisVertical, FileCode, GitCommitHorizontal]
+);
 
 /// Composite asset source: app icons first, then the default component set.
 struct AppAssets;

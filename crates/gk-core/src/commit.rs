@@ -1,7 +1,5 @@
 //! Commits.
 
-use std::time::SystemTime;
-
 use git2::Oid;
 
 use crate::error::{Error, Result};
@@ -12,7 +10,8 @@ use crate::repo::Repo;
 pub struct Signature {
     pub name: String,
     pub email: String,
-    pub time: SystemTime,
+    /// Author time with its UTC offset (so it can be rendered in local time).
+    pub time: git2::Time,
 }
 
 /// A single commit (metadata only; the diff comes later).
@@ -145,6 +144,32 @@ fn signature_to_owned(sig: git2::Signature<'_>, time: git2::Time) -> Signature {
     Signature {
         name: sig.name().unwrap_or_default().to_owned(),
         email: sig.email().unwrap_or_default().to_owned(),
-        time: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time.seconds().max(0) as u64),
+        time,
     }
+}
+
+impl Signature {
+    /// Local wall-clock time of this signature, as `dd/mm/yyyy HH:MM`.
+    /// The offset comes from git (the committer's local zone at the time).
+    pub fn date_time(&self) -> String {
+        let local_secs = self.time.seconds() + self.time.offset_minutes() as i64 * 60;
+        let days = local_secs.div_euclid(86_400);
+        let secs = local_secs.rem_euclid(86_400);
+        let (year, month, day) = civil_from_days(days);
+        format!("{day:02}/{month:02}/{year} {:02}:{:02}", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// Howard Hinnant's civil-from-days: epoch day number -> (y, m, d).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097); // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let y = yoe + era * 400;
+    (y - u64::from(m <= 2) as i64, m, d)
 }

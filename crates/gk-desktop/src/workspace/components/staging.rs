@@ -239,6 +239,23 @@ fn section_header(
 }
 
 /// A/M/D/U badge. The letter carries the meaning; color is only reinforcement.
+/// Change-kind label + semantic color, shared with the commit details view.
+pub(crate) fn kind_colors(
+    kind: ChangeKind,
+    success: gpui_kit::Hsla,
+    info: gpui_kit::Hsla,
+    danger: gpui_kit::Hsla,
+    muted: gpui_kit::Hsla,
+) -> (&'static str, gpui_kit::Hsla) {
+    match kind {
+        ChangeKind::Added => ("A", success),
+        ChangeKind::Modified => ("M", info),
+        ChangeKind::Deleted => ("D", danger),
+        ChangeKind::Renamed | ChangeKind::TypeChange => ("R/T", muted),
+        ChangeKind::Conflicted => ("U", danger),
+    }
+}
+
 fn kind_badge(
     kind: ChangeKind,
     success: gpui_kit::Hsla,
@@ -246,12 +263,6 @@ fn kind_badge(
     danger: gpui_kit::Hsla,
     muted: gpui_kit::Hsla,
 ) -> Div {
-    let (label, color) = match kind {
-        ChangeKind::Added => ("A", success),
-        ChangeKind::Modified => ("M", info),
-        ChangeKind::Deleted => ("D", danger),
-        ChangeKind::Renamed | ChangeKind::TypeChange => ("R/T", muted),
-        ChangeKind::Conflicted => ("U", danger),
-    };
+    let (label, color) = kind_colors(kind, success, info, danger, muted);
     div().w_5().flex_none().text_center().text_size(px(11.)).text_color(color).child(label)
 }

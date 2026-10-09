@@ -11,4 +11,5 @@ pub mod repo;
 pub mod status;
 
 pub use error::{Error, Result};
+pub use git2::Oid;
 pub use repo::Repo;
