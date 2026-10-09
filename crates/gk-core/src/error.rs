@@ -17,6 +17,9 @@ pub enum Error {
         "no user.name/user.email configured — set them with `git config --global user.name \"…\"`"
     )]
     MissingIdentity,
+
+    #[error("git remote failed: {0}")]
+    Remote(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

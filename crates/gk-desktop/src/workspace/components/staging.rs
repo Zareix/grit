@@ -60,15 +60,19 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
             this.child(section_header("Changes", unstaged_len, false, cx))
         })
         .child(unstaged_list)
-        // --- staged section (capped height so it never takes over) ---
+        // --- staged section (sized by content, capped) ---
         .when(staged_len > 0, |this| {
             this.child(section_header("Staged Changes", staged_len, true, cx))
         })
-        .child(staged_list)
+        .when(staged_len > 0, |this| this.child(staged_list))
         .child(commit_box::render(ws, cx))
 }
 
 /// A virtualized, scrollable list of file rows.
+///
+/// `Auto` sizing only fills a definite flex slot: the unstaged list is
+/// `flex_1`, the staged list gets an explicit height (row count × 36px,
+/// capped) — a `flex_none` uniform_list collapses to zero height.
 fn file_list(
     id: &'static str,
     workspace: &WeakEntity<Workspace>,
@@ -94,7 +98,10 @@ fn file_list(
             })
             .collect()
     })
-    .when(container_flex_none, |this| this.flex_none().max_h_56())
+    .when(container_flex_none, |this| {
+        let height = ((count as f32) * 36. + 8.).min(224.);
+        this.flex_none().h(px(height))
+    })
     .when(!container_flex_none, |this| this.flex_1().min_h_0())
     .w_full()
     .px_1()
@@ -180,11 +187,14 @@ fn file_row(
                     )
                 }),
         )
-        // stage/unstage command — right slot, centered
+        // stage/unstage command — right slot, centered. stop_propagation is
+        // explicit: without it the row's on_click also fires and re-selects
+        // the file in the *wrong* section (diff pane shows "No changes").
         .child(Button::new(toggle_id).ghost().xsmall().icon(toggle_icon).on_click({
             let workspace = workspace.clone();
             let path = path.clone();
             move |_, _, cx| {
+                cx.stop_propagation();
                 workspace.update(cx, |ws, cx| ws.toggle_file(path.clone(), staged, cx)).ok();
             }
         }))

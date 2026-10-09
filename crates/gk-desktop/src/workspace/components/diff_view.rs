@@ -2,10 +2,11 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _,
+    ActiveTheme as _, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::workspace::Workspace;
@@ -36,7 +37,13 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         return div();
     };
 
-    let title = path.to_string_lossy().to_string();
+    let full = path.to_string_lossy().to_string();
+    let name =
+        path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| full.clone());
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_string_lossy().into_owned());
     let source = if ws.selected_staged { "staged" } else { "unstaged" };
 
     let lines = parse_patch(&ws.diff_text);
@@ -44,7 +51,7 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     v_flex()
         .size_full()
         .min_h_0()
-        // header: file path + source + close
+        // header: file name + source chip on top, parent path below, close right
         .child(
             h_flex()
                 .px_3()
@@ -57,12 +64,50 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .child(
                     h_flex()
                         .min_w_0()
-                        .items_center()
-                        .gap_2()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(div().min_w_0().truncate().text_color(muted).child(title.clone()))
-                        .child(div().text_size(px(10.)).text_color(muted).child(source)),
+                        .flex_1()
+                        .overflow_hidden()
+                        .gap_1()
+                        .child(Icon::new(IconName::FileCode).size_3().text_color(muted))
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .gap_0p5()
+                                .child(
+                                    h_flex()
+                                        .min_w_0()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(px(13.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(cx.theme().foreground)
+                                                .child(name),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_1()
+                                                .rounded_sm()
+                                                .text_size(px(10.))
+                                                .text_color(muted)
+                                                .bg(border.opacity(0.5))
+                                                .child(source),
+                                        ),
+                                )
+                                // line 2: parent directory
+                                .when_some(parent, |this, parent| {
+                                    this.child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(10.))
+                                            .text_color(muted)
+                                            .child(format!("{} ", parent)),
+                                    )
+                                }),
+                        ),
                 )
                 .child(
                     Button::new("close-diff")

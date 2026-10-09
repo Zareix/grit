@@ -28,7 +28,9 @@ just check       # fast cargo check
 - `crates/gk-desktop` — app. `src/workspace/mod.rs` owns all state + actions;
   `src/workspace/components/*` are render functions
   `render(&Workspace, &mut Context<Workspace>) -> Div`.
-- Git access: local ops via `git2` (libgit2), nothing remote yet.
+- Git access: local ops via `git2` (libgit2); remote ops (fetch/pull/push)
+  shell out to the `git` binary (`gk-core::remote`) so SSH/keychain credentials
+  come from the user's git config — they run on the background executor.
 
 ## git2 0.21 gotchas (verified in source, not docs)
 
@@ -55,6 +57,21 @@ just check       # fast cargo check
   `.agents/skills/gpui-kit` catalog describes a newer ecosystem than 0.7.1
   (e.g. the `Diff` component does not exist in 0.7.1; `h_resizable(id)` takes
   no state argument — attach it with `.with_state(&Entity<ResizableState>)`).
+- `ResizablePanelGroup` always renders `size_full()` (both axes, not with
+  Styled) — it must live inside a constrained wrapper
+  (`div().flex_1().min_h_0().child(group)`), otherwise it overflows the
+  toolbar/status bar and pushes the whole content down. Give panels a
+  `.size(px(...))` + `.size_range(min..)` or a content-tall panel (a big
+  diff) grows beyond the window.
+- Dialogs (0.7.1): `window.open_dialog(cx, move |dialog, window, dialog_cx| …)`
+  — real signature is `(cx, build)`, the builder closure is `move` and you
+  **must name its params**: the site docs (all versions) show
+  `footer(|…| vec![Button])` as a closure factory, but 0.7.1 source takes
+  `footer(impl IntoElement)` and never renders `button_props` buttons (that's
+  AlertDialog-only). Build the footer yourself:
+  `DialogFooter::new().child(Button…)` + `window.close_dialog(cx)`.
+  Shadowing `cx` in the closure body while naming the param `_` borrows the
+  outer mutable `Context` in a `+ 'static` closure → E0521.
 - Return **concrete types** (`Div`, `Stateful<Div>`) from render helpers that
   use `cx.listener` inside: `-> impl IntoElement` captures `cx`'s lifetime
   (edition 2024 RPIT) and breaks the borrow checker during composition.

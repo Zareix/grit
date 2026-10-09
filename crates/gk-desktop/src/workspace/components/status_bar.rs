@@ -25,6 +25,10 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .map(|b| b.name.clone())
                 .unwrap_or_else(|| "no branch".into()),
         )
+        // transient info message (remote operation result)
+        .when_some(ws.info.clone(), |this, info| {
+            this.child(div().max_w_72().truncate().text_color(cx.theme().success).child(info))
+        })
         .child(div().flex_1())
         .when_some(ws.error.clone(), |this, error| {
             this.child(div().text_color(cx.theme().danger).child(error))

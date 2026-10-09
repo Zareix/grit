@@ -8,9 +8,12 @@ use std::path::PathBuf;
 
 use gk_core::{Repo, branch::Branch, commit::Commit, status::Status};
 use gpui_kit::component::{
-    ActiveTheme as _, ResizableState, h_resizable,
+    ActiveTheme as _, ResizableState, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    dialog::DialogFooter,
+    h_resizable,
     input::{InputEvent, InputState},
-    resizable_panel, v_resizable,
+    resizable_panel, v_flex, v_resizable,
 };
 use gpui_kit::*;
 
@@ -39,6 +42,10 @@ pub struct Workspace {
     layout: Entity<ResizableState>,
     /// Vertical split of the center column: history | diff.
     center_layout: Entity<ResizableState>,
+    /// Label of the remote operation currently running, if any.
+    remote_busy: Option<&'static str>,
+    /// Transient success/info message for the status bar.
+    info: Option<SharedString>,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
@@ -75,6 +82,8 @@ impl Workspace {
             current_branch: None,
             layout,
             center_layout,
+            remote_busy: None,
+            info: None,
             error: None,
             _subscriptions: vec![enter_subscription],
         };
@@ -266,6 +275,146 @@ impl Workspace {
         }
         cx.notify();
     }
+
+    /// Run a remote operation on a background thread (network + credentials),
+    /// then refresh the UI.
+    fn run_remote(&mut self, op: gk_core::remote::RemoteOp, cx: &mut Context<Self>) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        let args = [op.name().to_string()];
+        self.run_git_remote(op.name(), args.to_vec(), cx);
+    }
+
+    /// Push, prompting to create the upstream branch first.
+    /// User-requested push; opens the set-upstream dialog when the current
+    /// branch does not track a remote yet.
+    fn push(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        let branch = match &self.current_branch {
+            Some(branch) => branch.clone(),
+            None => {
+                self.error = Some("Cannot push: no current branch".into());
+                cx.notify();
+                return;
+            }
+        };
+
+        if branch.upstream.is_none() {
+            // Ask the user before creating the remote branch.
+            match self.repo.as_ref().map(gk_core::Repo::remotes) {
+                Some(Ok(remotes)) if !remotes.is_empty() => {
+                    let remote = remotes.first().cloned().expect("non-empty remotes");
+                    let branch_name = branch.name.clone();
+                    let weak = cx.entity().downgrade();
+                    window.open_dialog(cx, move |dialog, _, dialog_cx| {
+                        dialog
+                            .title("Set upstream branch?")
+                            .child(
+                                v_flex()
+                                    .gap_2()
+                                    .child(format!(
+                                        "\"{}\" does not track a remote branch yet.",
+                                        branch_name
+                                    ))
+                                    .child(
+                                        div()
+                                            .text_color(dialog_cx.theme().muted_foreground)
+                                            .child(format!(
+                                                "Publish it as {remote}/{branch_name} and set it as upstream?"
+                                            )),
+                                    ),
+                            )
+                            // 0.7.1: footer takes a value, the styled OK/Cancel
+                            // buttons from button_props are only rendered by
+                            // AlertDialog — build ours explicitly.
+                            .footer(
+                                DialogFooter::new()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("cancel")
+                                            .label("Cancel")
+                                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                                    )
+                                    .child(
+                                        Button::new("confirm")
+                                            .primary()
+                                            .label("Push and set upstream")
+                                            .on_click({
+                                                let weak = weak.clone();
+                                                let remote = remote.clone();
+                                                let branch_name = branch_name.clone();
+                                                move |_, window, cx| {
+                                                    window.close_dialog(cx);
+                                                    weak.update(cx, |ws, cx| {
+                                                        ws.set_upstream_and_push(
+                                                            remote.clone(),
+                                                            branch_name.clone(),
+                                                            cx,
+                                                        )
+                                                    })
+                                                    .ok();
+                                                }
+                                            }),
+                                    ),
+                            )
+                    });
+                    return;
+                }
+                _ => {
+                    self.error = Some("Cannot push: no remote configured".into());
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+
+        self.run_remote(gk_core::remote::RemoteOp::Push, cx);
+    }
+
+    /// Created by the set-upstream dialog: push with `--set-upstream`.
+    fn set_upstream_and_push(&mut self, remote: String, branch: String, cx: &mut Context<Self>) {
+        let args = vec!["push".to_string(), "--set-upstream".to_string(), remote, branch];
+        self.run_git_remote("push", args, cx);
+    }
+
+    fn run_git_remote(&mut self, label: &'static str, args: Vec<String>, cx: &mut Context<Self>) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        let Some(repo) = self.repo.clone() else { return };
+
+        self.remote_busy = Some(label);
+        self.info = None;
+        self.error = None;
+        cx.notify();
+
+        let job = cx.background_spawn(async move { repo.run_git(&args) });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                this.remote_busy = None;
+                match &result {
+                    Ok(out) => {
+                        this.info = Some(if out.is_empty() {
+                            format!("{label}: ok").into()
+                        } else {
+                            format!("{label}: {out}").into()
+                        });
+                        this.refresh(cx);
+                    }
+                    Err(e) => {
+                        this.error = Some(e.to_string().into());
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 impl Render for Workspace {
@@ -280,34 +429,41 @@ impl Render for Workspace {
             .bg(background)
             .text_color(foreground)
             // ---- toolbar ----
-            .child(toolbar::render(cx))
+            .child(toolbar::render(self, cx))
             // ---- main split: branches | history + diff | staging ----
+            // The resizable group always renders size_full — it must live in a
+            // constrained wrapper, otherwise it overflows past the toolbar and
+            // the status bar.
             .child(
-                h_resizable("main-layout")
-                    .with_state(&self.layout)
-                    .child(
-                        resizable_panel()
-                            .size(px(180.))
-                            .size_range(px(120.)..px(320.))
-                            .child(branches::render(self, cx)),
-                    )
-                    // center column: history on top, diff below (when selected)
-                    .child(
-                        v_resizable("center-layout")
-                            .with_state(&self.center_layout)
-                            .child(resizable_panel().child(history::render(self, cx)))
-                            .child(
-                                resizable_panel()
-                                    .visible(self.selected_path.is_some())
-                                    .child(diff_view::render(self, cx)),
-                            ),
-                    )
-                    .child(
-                        resizable_panel()
-                            .size(px(340.))
-                            .size_range(px(240.)..px(520.))
-                            .child(staging::render(self, cx)),
-                    ),
+                div().flex_1().min_h_0().child(
+                    h_resizable("main-layout")
+                        .with_state(&self.layout)
+                        .child(
+                            resizable_panel()
+                                .size(px(180.))
+                                .size_range(px(120.)..px(320.))
+                                .child(branches::render(self, cx)),
+                        )
+                        // center column: history on top, diff below (when selected)
+                        .child(
+                            v_resizable("center-layout")
+                                .with_state(&self.center_layout)
+                                .child(resizable_panel().child(history::render(self, cx)))
+                                .child(
+                                    resizable_panel()
+                                        .size(px(240.))
+                                        .size_range(px(120.)..gpui::Pixels::MAX)
+                                        .visible(self.selected_path.is_some())
+                                        .child(diff_view::render(self, cx)),
+                                ),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size(px(340.))
+                                .size_range(px(240.)..px(520.))
+                                .child(staging::render(self, cx)),
+                        ),
+                ),
             )
             // ---- status bar ----
             .child(status_bar::render(self, cx))

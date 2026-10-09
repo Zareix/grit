@@ -38,13 +38,23 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .px_3()
                 .py_1()
                 .gap_2()
+                .items_center()
+                .justify_between()
                 .border_b_1()
                 .border_color(border)
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(muted)
-                .child("History")
-                .child(ws.log.len().to_string()),
+                .child(
+                    h_flex()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(muted)
+                        .child("History"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(muted)
+                        .child(format!("{} commits", ws.log.len())),
+                ),
         )
         .child(div().id("commit-log").flex_1().min_h_0().overflow_y_scroll().children(
             if ws.log.is_empty() {

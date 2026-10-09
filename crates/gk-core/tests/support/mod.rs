@@ -24,12 +24,14 @@ impl TestRepo {
     }
 
     /// Write a file in the repo and stage it.
+    #[allow(dead_code)]
     pub fn write_and_stage(&self, rel: &str, content: &str) {
         self.write(rel, content);
         self.repo.stage_file(rel).expect("stage file");
     }
 
     /// Write a file in the repo (unstaged / untracked).
+    #[allow(dead_code)]
     pub fn write(&self, rel: &str, content: &str) {
         let path = self.repo.path.join(rel);
         if let Some(parent) = path.parent() {
@@ -44,6 +46,7 @@ impl TestRepo {
     }
 
     /// Commit whatever is staged with an unique-ish message and return the new HEAD oid.
+    #[allow(dead_code)]
     pub fn commit(&self, message: &str) -> git2::Oid {
         self.repo.commit(message).expect("commit")
     }
