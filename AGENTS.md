@@ -109,7 +109,13 @@ just check       # fast cargo check
 - No `whitespace_pre`; only `whitespace_normal` / `whitespace_nowrap`.
 - Full Lucide catalog is `gpui_kit::assets::IconName`
   (`component::IconName` is a subset). Generated list is in
-  `target/debug/build/gpui-kit-assets-*/out/icon_name.rs`.
+  `target/debug/build/gpui-kit-assets-*/out/icon_name.rs`. **The default
+  `Assets` source only embeds the 101 legacy component icons** — any other
+  Lucide catalog icon must be added to the `icon_assets!(ExtraIcons, […])`
+  list at the top of `src/main.rs`. `AppAssets` (also in `main.rs`) is the
+  composite source: `ExtraIcons` first, then the default `ComponentAssets`
+  fallback; forgetting an icon there fails silently at runtime (no compile
+  error, just a missing symbol at load).
 - `List` renders its own section headers via `ListDelegate::render_section_header`
   and hides empty sections — do not duplicate titles in the surrounding panel.
 - `InputState::value()` reads text; `set_value(value, window, cx)` clears it.

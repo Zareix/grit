@@ -58,24 +58,6 @@ impl RenderOnce for KindBadge {
     }
 }
 
-/// Small pill marking the checked-out branch.
-#[derive(IntoElement)]
-pub struct CurrentBadge;
-
-impl RenderOnce for CurrentBadge {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        div()
-            .flex_none()
-            .px_1()
-            .rounded_sm()
-            .text_size(px(10.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(cx.theme().primary)
-            .bg(cx.theme().primary.opacity(0.15))
-            .child("current")
-    }
-}
-
 /// Muted uppercase section label ("LOCAL", "REMOTES", …).
 #[derive(IntoElement)]
 pub struct SectionLabel {

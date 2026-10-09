@@ -1,12 +1,14 @@
 //! git-desktop — a Git client built in Rust with GPUI Kit.
 
+mod session;
 mod workspace;
 
 use gpui_kit::assets::{Assets as ComponentAssets, icon_assets};
+use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 use std::borrow::Cow;
 
-use crate::workspace::Workspace;
+use crate::session::Session;
 
 // Extra catalog icons used by the app but not embedded by the default
 // `Assets` source (which keeps only the 101 legacy component icons).
@@ -38,15 +40,19 @@ impl AssetSource for AppAssets {
 }
 
 fn main() {
-    // Repo path comes from the CLI, defaulting to the current directory.
-    let repo_path = std::env::args().nth(1).unwrap_or_else(|| ".".into());
+    // Optional repo path from the CLI; without one the session shows the
+    // tab picker page (or restores the persisted tabs).
+    let repo_path = std::env::args().nth(1);
 
     application().with_assets(AppAssets).run(move |cx| {
         // Required before using any gpui-kit component.
         init(cx);
 
-        open_window(WindowOptions::default(), cx, move |window, cx| {
-            cx.new(|cx| Workspace::new(repo_path.clone(), window, cx))
+        // TitleBar::window_options() gives the app a custom title bar drawn
+        // by the TitleBar element itself (tabs align with the native window
+        // buttons; on macOS the traffic lights sit at (9, 9)).
+        open_window(TitleBar::window_options(), cx, move |window, cx| {
+            cx.new(|cx| Session::new(repo_path.clone(), window, cx))
         })
         .expect("failed to open window");
     });

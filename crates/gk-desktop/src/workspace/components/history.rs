@@ -1,8 +1,9 @@
 //! Center column: commit history, virtualized (`uniform_list`).
 //!
-//! The WIP row — when the current branch is being viewed — is item 0 of the
-//! same list so it scrolls with the commits; every row is 28px tall, which is
-//! the uniform height `uniform_list` requires.
+//! The WIP row — shown when the current branch is being viewed *and* has
+//! pending changes — is item 0 of the same list so it scrolls with the
+//! commits; every row is 28px tall, which is the uniform height
+//! `uniform_list` requires.
 
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -15,6 +16,8 @@ use gk_core::Commit;
 fn wip_row(ws: &Workspace, workspace: &WeakEntity<Workspace>, cx: &App) -> Stateful<Div> {
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
+    // X/Y: staged files / all changed files (staged + unstaged).
+    let changes = ws.status.staged.len() + ws.status.unstaged.len();
 
     h_flex()
         .id("wip-row")
@@ -38,13 +41,11 @@ fn wip_row(ws: &Workspace, workspace: &WeakEntity<Workspace>, cx: &App) -> State
             }
         })
         .child(div().flex_1().min_w_0().truncate().text_color(cx.theme().info).child("// WIP"))
-        .child(
-            div()
-                .flex_none()
-                .text_size(px(11.))
-                .text_color(muted)
-                .child(format!("{} staged", ws.status.staged.len())),
-        )
+        .child(div().flex_none().text_size(px(11.)).text_color(muted).child(format!(
+            "{}/{} staged",
+            ws.status.staged.len(),
+            changes
+        )))
 }
 
 /// One commit row; click selects the commit (details on the right).
@@ -112,8 +113,10 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let workspace = cx.entity().downgrade();
     let viewing_other = ws.viewed_branch.is_some();
 
-    // WIP applies only to the checked-out branch's history.
-    let has_wip = !viewing_other;
+    // WIP applies only to the checked-out branch's history, and only with
+    // pending changes: nothing staged nor unstaged means no row at all.
+    let changes = ws.status.staged.len() + ws.status.unstaged.len();
+    let has_wip = !viewing_other && changes > 0;
     let log = if viewing_other { &ws.branch_log } else { &ws.log };
     let item_count = log.len() + usize::from(has_wip);
 
@@ -166,11 +169,13 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 range
                     .map(|ix| {
                         let viewing_other = ws.viewed_branch.is_some();
-                        if !viewing_other && ix == 0 {
+                        // Must match the `has_wip` used for item_count above.
+                        let has_wip = !viewing_other && !ws.status.is_empty();
+                        if has_wip && ix == 0 {
                             return wip_row(ws, &workspace, cx).into_any_element();
                         }
                         let log = if viewing_other { &ws.branch_log } else { &ws.log };
-                        let index = ix - usize::from(!viewing_other);
+                        let index = ix - usize::from(has_wip);
                         match log.get(index) {
                             Some(commit) => {
                                 commit_row(ws, &workspace, commit, cx).into_any_element()

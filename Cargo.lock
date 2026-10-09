@@ -2142,8 +2142,11 @@ name = "gk-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs 5.0.1",
  "gk-core",
  "gpui-kit",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

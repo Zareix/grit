@@ -17,7 +17,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::primitives::{CurrentBadge, SectionLabel};
+use super::primitives::SectionLabel;
 use crate::workspace::Workspace;
 use gk_core::remote::RemoteOp;
 
@@ -139,7 +139,15 @@ fn branch_row_shell(
         } else {
             muted
         }))
-        .child(div().min_w_0().truncate().text_color(foreground).child(name.clone()));
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(foreground)
+                // Current branch stands out by weight alone (no badge).
+                .when(is_current, |this| this.font_weight(FontWeight::SEMIBOLD))
+                .child(name.clone()),
+        );
 
     let mut row = h_flex()
         .w_full()
@@ -153,8 +161,7 @@ fn branch_row_shell(
         .group("branch-row")
         .when(is_viewed, |this| this.bg(cx.theme().accent.opacity(0.3)))
         .when(!is_viewed, |this| this.hover(|style| style.bg(border.opacity(0.4))))
-        .child(click_area)
-        .when(is_current, |this| this.child(CurrentBadge));
+        .child(click_area);
 
     if !with_menu {
         return row.into_any_element();

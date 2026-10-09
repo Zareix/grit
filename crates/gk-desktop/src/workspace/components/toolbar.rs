@@ -21,7 +21,14 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         .items_center()
         .border_b_1()
         .border_color(border)
-        .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child("git-desktop"))
+        .child(
+            div().min_w_0().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(
+                ws.repo
+                    .as_ref()
+                    .and_then(|repo| repo.name())
+                    .unwrap_or_else(|| "git-desktop".to_string()),
+            ),
+        )
         .child(div().flex_1())
         // remote commands, centered between two equal spacers
         .child(
