@@ -3,6 +3,22 @@
 Native Git client (GitKraken alternative) in Rust: GPUI Kit UI over a pure-Rust
 git plumbing core. Early stage; expect moving ground.
 
+## App structure (UI side)
+
+- `workspace/mod.rs` holds the **state struct only** (`Workspace`, `new`, `Render`);
+  **all mutators live in `workspace/actions.rs`** as a second `impl Workspace`
+  (methods `pub(crate)` — sibling components reach them). Keep that split when
+  adding commands: state = mod, behavior = actions.
+- Small shared visual pieces live in `components/primitives.rs` as
+  `#[derive(IntoElement)]` + manual `impl RenderOnce` structs (`KindBadge`,
+  `CurrentBadge`, `SectionLabel`, `PanelHeader`, `kind_colors`). Add more
+  there rather than copy-pasting a div pattern across panels.
+- Big virtualized lists: `uniform_list` + row height **uniform** (WIP row = item 0
+  of the history list); row closures get `&mut App` only — read state through a
+  captured `WeakEntity`, act through it (no `cx.listener`).
+- The diff patch is **pre-parsed into `Workspace.diff_rows`**
+  (`set_diff`, in actions) — never re-parse a patch inside `render`.
+
 ## Commands
 
 ```sh

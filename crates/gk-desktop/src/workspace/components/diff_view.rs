@@ -12,12 +12,13 @@ use gpui_kit::*;
 use crate::workspace::Workspace;
 
 /// One rendered patch line.
-struct PatchLine {
-    text: String,
-    kind: LineKind,
+pub(crate) struct PatchLine {
+    pub(crate) text: String,
+    pub(crate) kind: LineKind,
 }
 
-enum LineKind {
+#[derive(Clone, Copy)]
+pub(crate) enum LineKind {
     /// Added content.
     Added,
     /// Removed content.
@@ -58,7 +59,7 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         "unstaged".to_string()
     };
 
-    let lines = parse_patch(&ws.diff_text);
+    let lines = &ws.diff_rows;
 
     v_flex()
         .size_full()
@@ -148,12 +149,12 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                             .child("No changes"),
                     ]
                 } else {
-                    lines.into_iter().map(|line| patch_line_row(line, cx)).collect()
+                    lines.iter().map(|line| patch_line_row(line, cx)).collect()
                 }),
         )
 }
 
-fn patch_line_row(line: PatchLine, cx: &mut Context<Workspace>) -> Div {
+fn patch_line_row(line: &PatchLine, cx: &mut Context<Workspace>) -> Div {
     let theme = cx.theme();
     let (bg, fg) = match line.kind {
         LineKind::Added => (Some(theme.success.opacity(0.12)), theme.success),
@@ -170,7 +171,7 @@ fn patch_line_row(line: PatchLine, cx: &mut Context<Workspace>) -> Div {
         .whitespace_nowrap()
         .line_height(relative(1.4))
         .text_color(fg)
-        .child(line.text);
+        .child(line.text.clone());
     if let Some(bg) = bg {
         row = row.bg(bg);
     }
@@ -178,7 +179,7 @@ fn patch_line_row(line: PatchLine, cx: &mut Context<Workspace>) -> Div {
 }
 
 /// Parse our unified patch text into colored lines.
-fn parse_patch(patch: &str) -> Vec<PatchLine> {
+pub(crate) fn parse_patch(patch: &str) -> Vec<PatchLine> {
     patch
         .lines()
         .map(|raw| {

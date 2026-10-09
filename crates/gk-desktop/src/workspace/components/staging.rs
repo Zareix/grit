@@ -2,7 +2,7 @@
 //! each with a header that never scrolls away, and two-line file rows in a
 //! virtualized list.
 
-use gk_core::status::{ChangeKind, FileEntry};
+use gk_core::status::FileEntry;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
@@ -15,6 +15,7 @@ use gpui_kit::*;
 use crate::workspace::Workspace;
 
 use super::commit_box;
+use super::primitives::KindBadge;
 
 /// Theme colors needed by the row closures (they only get `&mut App`).
 #[derive(Clone, Copy)]
@@ -160,7 +161,7 @@ fn file_row(
             }
         })
         // badge — left slot, centered by the row's items_center
-        .child(kind_badge(entry.kind, success, info, danger, muted))
+        .child(KindBadge::new(entry.kind, success, info, danger, muted))
         // middle: two stacked lines
         .child(
             v_flex()
@@ -236,33 +237,4 @@ fn section_header(
                     if action == "unstage" { this.unstage_all(cx) } else { this.stage_all(cx) }
                 })),
         )
-}
-
-/// A/M/D/U badge. The letter carries the meaning; color is only reinforcement.
-/// Change-kind label + semantic color, shared with the commit details view.
-pub(crate) fn kind_colors(
-    kind: ChangeKind,
-    success: gpui_kit::Hsla,
-    info: gpui_kit::Hsla,
-    danger: gpui_kit::Hsla,
-    muted: gpui_kit::Hsla,
-) -> (&'static str, gpui_kit::Hsla) {
-    match kind {
-        ChangeKind::Added => ("A", success),
-        ChangeKind::Modified => ("M", info),
-        ChangeKind::Deleted => ("D", danger),
-        ChangeKind::Renamed | ChangeKind::TypeChange => ("R/T", muted),
-        ChangeKind::Conflicted => ("U", danger),
-    }
-}
-
-fn kind_badge(
-    kind: ChangeKind,
-    success: gpui_kit::Hsla,
-    info: gpui_kit::Hsla,
-    danger: gpui_kit::Hsla,
-    muted: gpui_kit::Hsla,
-) -> Div {
-    let (label, color) = kind_colors(kind, success, info, danger, muted);
-    div().w_5().flex_none().text_center().text_size(px(11.)).text_color(color).child(label)
 }

@@ -17,6 +17,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::primitives::{CurrentBadge, SectionLabel};
 use crate::workspace::Workspace;
 use gk_core::remote::RemoteOp;
 
@@ -97,21 +98,11 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                         this.view_branch_current(cx);
                     }
                 }))
-                .child(section_label("LOCAL", muted))
+                .child(SectionLabel::new("LOCAL", cx))
                 .children(local_rows)
-                .child(section_label("REMOTES", muted).mt_2())
+                .child(div().mt_2().child(SectionLabel::new("REMOTES", cx)))
                 .children(remote_rows),
         )
-}
-
-fn section_label(title: &'static str, color: gpui_kit::Hsla) -> Div {
-    h_flex()
-        .px_2()
-        .py_0p5()
-        .text_size(px(10.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(color)
-        .child(title)
 }
 
 /// Row click = view this branch's history. Menu button (hover) = actions.
@@ -163,7 +154,7 @@ fn branch_row_shell(
         .when(is_viewed, |this| this.bg(cx.theme().accent.opacity(0.3)))
         .when(!is_viewed, |this| this.hover(|style| style.bg(border.opacity(0.4))))
         .child(click_area)
-        .when(is_current, |this| this.child(current_badge(cx)));
+        .when(is_current, |this| this.child(CurrentBadge));
 
     if !with_menu {
         return row.into_any_element();
@@ -192,19 +183,6 @@ fn branch_row_shell(
         move |menu, _, _| branch_menu(menu, &branch, is_current, &workspace)
     })
     .into_any_element()
-}
-
-/// Small pill marking the checked-out branch.
-fn current_badge(cx: &Context<Workspace>) -> Div {
-    div()
-        .flex_none()
-        .px_1()
-        .rounded_sm()
-        .text_size(px(10.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(cx.theme().primary)
-        .bg(cx.theme().primary.opacity(0.15))
-        .child("current")
 }
 
 fn branch_menu(

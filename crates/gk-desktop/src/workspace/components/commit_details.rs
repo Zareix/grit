@@ -10,6 +10,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::primitives::PanelHeader;
 use crate::workspace::Workspace;
 use gk_core::status::FileEntry;
 
@@ -115,13 +116,7 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .flex_none()
                 .px_2()
                 .py_1()
-                .gap_2()
-                .items_center()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(muted)
-                .child("Changes")
-                .child(format!("{} files", ws.commit_files.len())),
+                .child(PanelHeader::new("Changes", ws.commit_files.len())),
         )
         .child(
             div()
@@ -155,13 +150,13 @@ fn changed_file_row(
         .map(|p| p.to_string_lossy().into_owned());
     let path = entry.path.clone();
     let is_selected = ws.selected_path.as_ref() == Some(&entry.path);
-    let theme = cx.theme();
-    let (label, color) = super::staging::kind_colors(
+    let color = cx.theme();
+    let (label, color) = super::primitives::kind_colors(
         entry.kind,
-        theme.success,
-        theme.info,
-        theme.danger,
-        theme.muted_foreground,
+        color.success,
+        color.info,
+        color.danger,
+        color.muted_foreground,
     );
 
     div()
