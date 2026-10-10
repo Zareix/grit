@@ -32,9 +32,6 @@ just check       # fast cargo check
 - Run `just fmt` before `just ci`: `fmt-check` fails on unformatted code.
 - clippy denies warnings; `unused dependency` warnings fail lint — wire deps
   up when you add them.
-- Toolchain is nightly via `rust-toolchain.toml` (GPUI uses unstable std
-  features like `cold_path`); rustup installs it automatically. All lint/fmt
-  recipes call `+nightly` explicitly — keep that.
 
 ## Layout
 

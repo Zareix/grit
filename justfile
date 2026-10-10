@@ -4,8 +4,6 @@
 default:
     @just --list
 
-toolchain := "nightly"
-
 # --- dev ---------------------------------------------------------------
 
 # Build the workspace (debug)
@@ -32,17 +30,16 @@ test-core:
 
 # --- lint & format -----------------------------------------------------
 
-# Format all code (rustfmt needs nightly to parse edition-2024+ GPUI code)
 fmt:
-    cargo +{{toolchain}} fmt --all
+    cargo fmt --all
 
 # Verify formatting without writing (CI)
 fmt-check:
-    cargo +{{toolchain}} fmt --all -- --check
+    cargo fmt --all -- --check
 
 # Run clippy on everything, deny warnings
 lint:
-    cargo +{{toolchain}} clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Format + lint in one pass
 ci: fmt-check lint test
