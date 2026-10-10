@@ -20,10 +20,18 @@ jobs:
 
       - name: Install system dependencies
         # gpui-pre-linux → gpui-pre-wgpu → zed-font-kit links fontconfig via
-        # pkg-config (fontconfig.pc). That is the only build-time system dep.
+        # pkg-config, and the gpui X11/XWayland backend links libxcb +
+        # libxkbcommon(-x11) directly. They are the only build-time deps: the
+        # stock rust:bookworm image ships fontconfig, which masked this in my
+        # local docker check, and `cargo check` doesn't link either.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig-dev pkg-config
+          sudo apt-get install -y \
+            libfontconfig-dev \
+            pkg-config \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
