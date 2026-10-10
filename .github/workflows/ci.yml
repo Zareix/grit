@@ -18,8 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No Linux system packages needed: the gpui-pre linux stack is
-      # pure-Rust (verified with a bare `rust:bookworm` cargo check).
+      - name: Install system dependencies
+        # gpui-pre-linux → gpui-pre-wgpu → zed-font-kit links fontconfig via
+        # pkg-config (fontconfig.pc). That is the only build-time system dep.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig-dev pkg-config
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
