@@ -27,7 +27,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
