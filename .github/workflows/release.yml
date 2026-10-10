@@ -22,6 +22,9 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PWD: ${{ secrets.MACOS_CERT_PWD }}
+      KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
       NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
       NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
       NOTARY_P8: ${{ secrets.NOTARY_P8 }}
@@ -71,11 +74,25 @@ jobs:
           PLIST
           plutil -lint "$APP_DIR/Contents/Info.plist"
 
-      - name: Import signing certificate
-        uses: apple-actions/import-codesign-certs@v7
-        with:
-          p12-file-base64: ${{ secrets.MACOS_CERT_P12 }}
-          p12-password: ${{ secrets.MACOS_CERT_PWD }}
+      - name: Import signing certificate (verbose, with diagnostics)
+        run: |
+          CERT="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          echo "$MACOS_CERT_P12" | base64 --decode --output "$CERT"
+          # Decoded artifact sanity: size + hash prove the secret was intact.
+          ls -l "$CERT"
+          shasum -a 256 "$CERT"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$MACOS_CERT_PWD" \
+            -T /usr/bin/codesign -f pkcs12
+          # Register the keychain in the default search list so codesign
+          # resolves the identity later.
+          security list-keychain -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN"
 
       - name: Sign .app (Developer ID + hardened runtime)
         run: |
