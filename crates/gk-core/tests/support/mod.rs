@@ -19,6 +19,13 @@ impl TestRepo {
         config.set_str("user.name", "Test User").expect("set name");
         config.set_str("user.email", "test@example.com").expect("set email");
 
+        // Point the (unborn) HEAD at `main` explicitly: libgit2 defaults to
+        // `master` and ignores the machine's init.defaultBranch, which made
+        // these tests depend on the local git config.
+        git_repo
+            .reference_symbolic("HEAD", "refs/heads/main", true, "test: default to main")
+            .expect("set HEAD to main");
+
         let repo = Repo::open(dir.path()).expect("open repo");
         Self { dir, repo }
     }
