@@ -84,7 +84,14 @@ jobs:
           codesign --verify --deep --strict --verbose=2 git-desktop.app
 
       - name: Create dmg
-        run: hdiutil create -volname git-desktop -srcfolder git-desktop.app -format UDZO "git-desktop-aarch64-macos.dmg"
+        # dmg-root staging: app + /Applications symlink for the classic
+        # drag-and-drop install, per the packaging guide.
+        run: |
+          mkdir -p dmg-root
+          cp -R git-desktop.app dmg-root/git-desktop.app
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname git-desktop -srcfolder dmg-root \
+            -format UDZO "git-desktop-aarch64-macos.dmg"
 
       - name: Notarize dmg
         run: |
