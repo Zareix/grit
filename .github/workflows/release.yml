@@ -21,6 +21,10 @@ jobs:
     needs: [version]
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+      NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+      NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+      NOTARY_P8: ${{ secrets.NOTARY_P8 }}
     steps:
       - uses: actions/checkout@v7
 
@@ -65,13 +69,38 @@ jobs:
             </dict>
           </plist>
           PLIST
-          # Validate the bundle per the packaging guide, then seal it. Ad-hoc
-          # signature only: a public release needs Developer ID + notarization.
           plutil -lint "$APP_DIR/Contents/Info.plist"
-          codesign --force --sign - "$APP_DIR"
+
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.MACOS_CERT_P12 }}
+          p12-password: ${{ secrets.MACOS_CERT_PWD }}
+
+      - name: Sign .app (Developer ID + hardened runtime)
+        run: |
+          codesign --force --timestamp --options runtime \
+            --sign "$APPLE_IDENTITY" git-desktop.app
+          codesign --verify --deep --strict --verbose=2 git-desktop.app
 
       - name: Create dmg
         run: hdiutil create -volname git-desktop -srcfolder git-desktop.app -format UDZO "git-desktop-aarch64-macos.dmg"
+
+      - name: Notarize dmg
+        run: |
+          P8="$RUNNER_TEMP/notary.p8"
+          echo "$NOTARY_P8" | base64 --decode --output "$P8"
+          xcrun notarytool submit "git-desktop-aarch64-macos.dmg" \
+            --key "$P8" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait
+
+      - name: Staple dmg
+        run: |
+          xcrun stapler staple git-desktop-aarch64-macos.dmg
+          # Validation check before shipping per the packaging guide.
+          xcrun stapler validate git-desktop-aarch64-macos.dmg
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
