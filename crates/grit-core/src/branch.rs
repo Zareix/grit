@@ -79,6 +79,15 @@ impl Repo {
         Ok(())
     }
 
+    /// Create a new local branch at the given commit (`git branch <name>
+    /// <oid>`), without checking it out.
+    pub fn create_branch_at(&self, name: &str, oid: Oid) -> Result<()> {
+        let repo = self.git2()?;
+        let commit = repo.find_commit(oid)?;
+        repo.branch(name, &commit, false)?;
+        Ok(())
+    }
+
     /// Checkout a remote-tracking branch (`origin/main`) as a local branch
     /// tracking it (`git checkout <short>` with auto-create). When a local
     /// branch with the same short name already exists, it is checked out
@@ -128,6 +137,16 @@ impl Repo {
             None => format!("refs/heads/{name}"),
         };
         repo.set_head(&ref_name)?;
+        Ok(())
+    }
+
+    /// Switch the working tree to a specific commit (detached HEAD, like
+    /// `git checkout <oid>`); used by the log's "Checkout this commit".
+    pub fn checkout_commit(&self, oid: Oid) -> Result<()> {
+        let repo = self.git2()?;
+        let commit = repo.find_commit(oid)?;
+        repo.checkout_tree(commit.as_object(), None)?;
+        repo.set_head_detached(oid)?;
         Ok(())
     }
 

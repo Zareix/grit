@@ -37,4 +37,12 @@ impl Repo {
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
     }
+
+    /// Create a lightweight tag at the given commit (`git tag <name>
+    /// <oid>`). Refuses to overwrite an existing tag, like git itself.
+    pub fn create_tag(&self, name: &str, oid: Oid) -> Result<()> {
+        let repo = self.git2()?;
+        repo.reference(&format!("refs/tags/{name}"), oid, false, "grit: create tag")?;
+        Ok(())
+    }
 }

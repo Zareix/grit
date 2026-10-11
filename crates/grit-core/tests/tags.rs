@@ -26,3 +26,24 @@ fn empty_repo_has_no_tags() {
     let t = TestRepo::new();
     assert!(t.repo.tags().unwrap().is_empty());
 }
+
+#[test]
+fn create_tag_at_commit() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    let first = t.commit("first");
+    t.write_and_stage("b.txt", "2");
+    let second = t.commit("second");
+
+    t.repo.create_tag("v0.9", first).unwrap();
+    let tags = t.repo.tags().unwrap();
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].name, "v0.9");
+    assert_eq!(tags[0].target, first);
+
+    // Creating the same tag again is refused, like `git tag` without -f.
+    assert!(t.repo.create_tag("v0.9", second).is_err());
+
+    t.repo.create_tag("v1.0", second).unwrap();
+    assert_eq!(t.repo.tags().unwrap().len(), 2);
+}

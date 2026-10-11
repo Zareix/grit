@@ -8,12 +8,13 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     dialog::DialogFooter,
     diff::{DiffFile, DiffMode},
+    input::Input,
     v_flex,
 };
 use gpui_kit::*;
 use grit_core::{Oid, RemoteOp, Repo, branch::BranchType};
 
-use super::{CommitRef, CommitRefKind, CopyPath, Workspace};
+use super::{CommitRef, CommitRefKind, CopyPath, CreateTarget, Workspace};
 
 const MAX_LOG_COMMITS: usize = 500;
 
@@ -62,6 +63,7 @@ impl Workspace {
                 self.tags = tags;
                 self.log = log;
                 self.rebuild_refs();
+                self.sync_remote_tree(cx);
                 self.error = None;
                 self.sync_selection(&repo, cx);
             }
@@ -70,6 +72,15 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Push the current remote branches into the tree state as a GitKraken-
+    /// style hierarchy (remote root → folders per `/` segment → leaves), and
+    /// prune collapse records for folders that no longer exist.
+    fn sync_remote_tree(&mut self, cx: &mut Context<Self>) {
+        let items = super::components::branches::remote_tree_items(self);
+        super::components::branches::prune_collapsed(items.iter(), &mut self.remote_collapsed);
+        self.remote_tree.update(cx, |state, cx| state.set_items(items, cx));
     }
 
     /// Regroup branches + tags by the commit they point at, for the log's
@@ -440,6 +451,139 @@ impl Workspace {
                 self.error = Some(e.to_string().into());
                 cx.notify();
             }
+        }
+    }
+
+    /// Checkout a specific commit (detached HEAD), from the log's
+    /// "Checkout this commit".
+    pub(crate) fn checkout_commit(&mut self, oid: Oid, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        match repo.checkout_commit(oid) {
+            Ok(()) => self.refresh(cx),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Create a local branch pointing at a commit (dialog result).
+    pub(crate) fn create_branch_at(&mut self, name: &str, oid: Oid, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        match repo.create_branch_at(name, oid) {
+            Ok(()) => self.refresh(cx),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Create a tag pointing at a commit (dialog result).
+    pub(crate) fn create_tag_at(&mut self, name: &str, oid: Oid, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        match repo.create_tag(name, oid) {
+            Ok(()) => self.refresh(cx),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// "Create branch here" on a commit: small input dialog naming the
+    /// branch to attach at `oid`.
+    pub(crate) fn open_create_branch_dialog(
+        &mut self,
+        oid: Oid,
+        summary: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_name_dialog(
+            "Create branch here",
+            format!("New local branch pointing at \"{summary}\"."),
+            CreateTarget::Branch(oid),
+            window,
+            cx,
+        );
+    }
+
+    /// "Create tag here" on a commit: small input dialog naming the tag to
+    /// attach at `oid`.
+    pub(crate) fn open_create_tag_dialog(
+        &mut self,
+        oid: Oid,
+        summary: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_name_dialog(
+            "Create tag here",
+            format!("New tag pointing at \"{summary}\"."),
+            CreateTarget::Tag(oid),
+            window,
+            cx,
+        );
+    }
+
+    /// Shared input dialog: a hint line + the persistent `name_input` +
+    /// Cancel / Create. Enter confirms through the input's subscription.
+    fn open_name_dialog(
+        &mut self,
+        title: &'static str,
+        question: String,
+        target: CreateTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_create = Some(target);
+        self.name_input.update(cx, |state, cx| state.set_value("", window, cx));
+        let weak = cx.entity().downgrade();
+        let input = self.name_input.clone();
+        window.open_dialog(cx, move |dialog, _, dialog_cx| {
+            let weak = weak.clone();
+            let input = input.clone();
+            dialog
+                .title(title)
+                .child(v_flex().gap_2().child(
+                    div().text_color(dialog_cx.theme().muted_foreground).child(question.clone()),
+                ))
+                .child(div().flex_1().min_w_0().child(Input::new(&input).w_full()))
+                .footer(
+                    DialogFooter::new()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(Button::new("confirm").primary().label("Create").on_click(
+                            move |_, window, cx| {
+                                weak.update(cx, |ws, cx| ws.confirm_create_here(window, cx)).ok();
+                            },
+                        )),
+                )
+        });
+    }
+
+    /// Confirm the create-here dialog (Enter on the name input, or the
+    /// Create button): consumes `pending_create` and builds the ref.
+    pub(crate) fn confirm_create_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.pending_create.take() else { return };
+        let name = self.name_input.read(cx).value().trim().to_string();
+        self.name_input.update(cx, |state, cx| state.set_value("", window, cx));
+        if name.is_empty() {
+            self.error = Some("Name is empty".into());
+            cx.notify();
+            window.close_dialog(cx);
+            return;
+        }
+
+        window.close_dialog(cx);
+        match target {
+            CreateTarget::Branch(oid) => self.create_branch_at(&name, oid, cx),
+            CreateTarget::Tag(oid) => self.create_tag_at(&name, oid, cx),
         }
     }
 

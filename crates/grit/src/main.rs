@@ -20,6 +20,7 @@ icon_assets!(
     [
         ArrowDown,
         ArrowUp,
+        Cloud,
         CloudDownload,
         Code,
         EllipsisVertical,
@@ -30,6 +31,7 @@ icon_assets!(
         GitBranch,
         Upload,
         Download,
+        Tag,
     ]
 );
 
@@ -53,7 +55,29 @@ impl AssetSource for AppAssets {
     }
 }
 
-actions!(grit, [Quit]);
+actions!(grit, [Quit, NewTab, CloseTab]);
+
+/// Route a tab-level action to the root [`Session`] of the active window.
+/// Same global-handler pattern as gpui-kit's inspector toggle: the binding
+/// has no key context, so the shortcut works wherever focus happens to be.
+///
+/// gpui-kit's `open_window` wraps the app view in a `base::Root`, so the
+/// Session is reached through the Root's content view, not `window.root`.
+fn route_tab_action(
+    cx: &mut gpui_kit::App,
+    operate: impl Fn(&mut Session, &mut Context<Session>) + 'static,
+) {
+    let Some(window) = cx.active_window() else { return };
+    cx.defer(move |cx| {
+        _ = window.update(cx, |_, window, cx| {
+            let Some(Some(root)) = window.root::<gpui_kit::base::Root>() else { return };
+            let Ok(session) = root.read(cx).view().clone().downcast::<Session>() else {
+                return;
+            };
+            session.update(cx, |session, cx| operate(session, cx));
+        });
+    });
+}
 
 fn main() {
     // Optional repo path from the CLI; without one the session shows the
@@ -72,8 +96,16 @@ fn main() {
         // App menu. gpui builds no menu bar by default and on macOS ⌘Q is
         // carried by the menu bar's Quit item, so without this it does
         // nothing. The key equivalent comes from the `cmd-q` binding.
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-w", CloseTab, None),
+            KeyBinding::new("cmd-t", NewTab, None),
+        ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        // Tab commands: bound without context (global), routed to the
+        // active window's root Session.
+        cx.on_action(|_: &NewTab, cx| route_tab_action(cx, |s, cx| s.open_new_tab(cx)));
+        cx.on_action(|_: &CloseTab, cx| route_tab_action(cx, |s, cx| s.close_active_tab(cx)));
         cx.set_menus([Menu::new("Grit").items([
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),

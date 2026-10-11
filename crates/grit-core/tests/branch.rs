@@ -137,3 +137,36 @@ fn checkout_remote_branch_handles_nested_names() {
     assert_eq!(current.head, tip);
     assert_eq!(current.upstream.as_deref(), Some("origin/feature/x"));
 }
+
+#[test]
+fn create_branch_at_specific_commit() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    let first = t.commit("first");
+    t.write_and_stage("b.txt", "2");
+    t.commit("second");
+
+    // The branch points at the first commit without touching HEAD, so the
+    // worktree still reflects the second commit.
+    t.repo.create_branch_at("at-first", first).unwrap();
+    t.repo.checkout_branch("at-first").unwrap();
+
+    let current = t.repo.current_branch().unwrap().expect("a branch");
+    assert_eq!(current.name, "at-first");
+    assert_eq!(current.head, first);
+    assert!(!t.repo.path.join("b.txt").exists(), "worktree back at first");
+}
+
+#[test]
+fn checkout_commit_detaches_head() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    let first = t.commit("first");
+    t.write_and_stage("b.txt", "2");
+    t.commit("second");
+
+    t.repo.checkout_commit(first).unwrap();
+
+    assert!(t.repo.current_branch().unwrap().is_none(), "detached HEAD");
+    assert!(!t.repo.path.join("b.txt").exists(), "worktree back at first");
+}

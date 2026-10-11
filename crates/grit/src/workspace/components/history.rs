@@ -3,16 +3,26 @@
 //! Layout follows GitKraken's log: ref chips (branches / tags) on the left,
 //! then the graph lane, then the commit title, then author + date. The list
 //! shows the log across all refs; branch clicks scroll to a branch tip
-//! through the tracked `UniformListScrollHandle`. The WIP row — shown when
+//! through the tracked `UniformListScrollHandle`. Branch chips and remotes
+//! carry the sidebar's context menus on right-click; tags have no actions
+//! yet. The WIP row — shown when
 //! the current branch has pending changes — is item 0 of the same list so
 //! it scrolls with the commits; every row is 28px tall, which is the
 //! uniform height `uniform_list` requires.
 
-use gpui_kit::component::{ActiveTheme as _, h_flex, hover_card::HoverCard, v_flex};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, h_flex,
+    hover_card::HoverCard,
+    menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+    v_flex,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::branches::{branch_menu, remote_branch_menu};
 use crate::workspace::{CommitRef, CommitRefKind, Workspace};
+use grit_core::branch::BranchType;
 use grit_core::{Commit, Oid};
 
 use std::time::Duration;
@@ -70,10 +80,10 @@ fn wip_row(ws: &Workspace, workspace: &WeakEntity<Workspace>, cx: &App) -> State
 
 /// The refs (branches / tags) pointing at a commit: a single chip, then a
 /// muted "+N" whose HoverCard lists the remaining refs on hover.
-fn ref_chips(refs: &[CommitRef], oid: Oid, cx: &App) -> Div {
+fn ref_chips(refs: &[CommitRef], oid: Oid, workspace: &WeakEntity<Workspace>, cx: &App) -> Div {
     let mut cell = h_flex().flex_none().w(px(REFS_W)).min_w_0().gap_1().overflow_hidden();
     let Some(first) = refs.first() else { return cell };
-    cell = cell.child(ref_chip(first, 140., cx));
+    cell = cell.child(ref_chip(first, workspace, 140., cx));
 
     let extra = refs.len() - 1;
     if extra > 0 {
@@ -98,7 +108,8 @@ fn ref_chips(refs: &[CommitRef], oid: Oid, cx: &App) -> Div {
                         .child(format!("+{extra}")),
                 )
                 .child({
-                    let chips: Vec<Div> = more.iter().map(|r| ref_chip(r, 220., cx)).collect();
+                    let chips: Vec<_> =
+                        more.iter().map(|r| ref_chip(r, workspace, 220., cx)).collect();
                     v_flex().gap_0p5().children(chips)
                 }),
         );
@@ -108,12 +119,23 @@ fn ref_chips(refs: &[CommitRef], oid: Oid, cx: &App) -> Div {
 
 /// One ref as a small colored chip (in the log row and in the "+N" hover
 /// card): local branch = primary, tag = success, remote = info. `max_w`
-/// bounds the name before an ellipsis kicks in.
-fn ref_chip(r: &CommitRef, max_w: f32, cx: &App) -> Div {
+/// bounds the name before an ellipsis kicks in. Branch chips open the same
+/// context menus as the sidebar on right-click.
+fn ref_chip(
+    r: &CommitRef,
+    workspace: &WeakEntity<Workspace>,
+    max_w: f32,
+    cx: &App,
+) -> gpui_kit::AnyElement {
     let color = match r.kind {
         CommitRefKind::Local => cx.theme().primary,
         CommitRefKind::Remote => cx.theme().info,
         CommitRefKind::Tag => cx.theme().success,
+    };
+    // Only tags carry their own icon; branch chips stay bare.
+    let icon = match r.kind {
+        CommitRefKind::Tag => Some(IconName::Tag),
+        _ => None,
     };
     div()
         .min_w_0()
@@ -123,16 +145,56 @@ fn ref_chip(r: &CommitRef, max_w: f32, cx: &App) -> Div {
         .text_size(px(11.))
         .text_color(color)
         .when(r.is_current, |this| this.font_weight(FontWeight::SEMIBOLD))
-        .child(div().max_w(px(max_w)).truncate().child(r.name.clone()))
+        .child(
+            h_flex()
+                .min_w_0()
+                .gap_1()
+                .when_some(icon, |this, icon| {
+                    this.child(Icon::new(icon).size_3().text_color(color))
+                })
+                .child(div().max_w(px(max_w)).truncate().child(r.name.clone())),
+        )
+        // Same menus as the sidebar, read live when the menu opens.
+        .context_menu({
+            let workspace = workspace.clone();
+            let r = r.clone();
+            move |menu, _, cx| ref_menu(menu, &r, &workspace, cx)
+        })
+        .into_any_element()
 }
 
-/// One commit row; click selects the commit (details on the right).
+/// The branches sidebar's menus on the log's ref chips. Only branches act —
+/// tags have no actions yet, and an empty menu never opens.
+fn ref_menu(
+    menu: PopupMenu,
+    r: &CommitRef,
+    workspace: &WeakEntity<Workspace>,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let Some(entity) = workspace.upgrade() else { return menu };
+    match r.kind {
+        CommitRefKind::Local => match entity
+            .read(cx)
+            .branches
+            .iter()
+            .find(|b| b.kind == BranchType::Local && b.name == r.name)
+        {
+            Some(branch) => branch_menu(menu, branch, r.is_current, workspace),
+            None => menu,
+        },
+        CommitRefKind::Remote => remote_branch_menu(menu, &r.name, workspace),
+        CommitRefKind::Tag => menu,
+    }
+}
+
+/// One commit row; click selects the commit (details on the right), and
+/// right-click offers checkout-at-commit / create branch / create tag.
 fn commit_row(
     ws: &Workspace,
     workspace: &WeakEntity<Workspace>,
     commit: &Commit,
     cx: &App,
-) -> Stateful<Div> {
+) -> gpui_kit::AnyElement {
     let border = cx.theme().border;
     let foreground = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
@@ -162,7 +224,7 @@ fn commit_row(
             }
         })
         // refs | graph | title | author | date
-        .child(ref_chips(refs, oid, cx))
+        .child(ref_chips(refs, oid, workspace, cx))
         // Graph lane placeholder: a plain node dot; the real graph (edges,
         // lanes) comes later.
         .child(
@@ -202,6 +264,56 @@ fn commit_row(
                 .text_color(muted)
                 .child(commit.author.date_time()),
         )
+        .context_menu({
+            let workspace = workspace.clone();
+            let summary = commit.summary.clone();
+            move |menu, _, _| commit_menu(menu, oid, &summary, &workspace)
+        })
+        .into_any_element()
+}
+
+/// The commit row's menu: detach at this commit, or attach a branch / tag
+/// here via the shared name dialog.
+fn commit_menu(
+    mut menu: PopupMenu,
+    oid: Oid,
+    summary: &str,
+    workspace: &WeakEntity<Workspace>,
+) -> PopupMenu {
+    // Checkout this commit (detached HEAD)
+    menu = menu.item(
+        PopupMenuItem::new("Checkout this commit").icon(IconName::GitCommitHorizontal).on_click({
+            let workspace = workspace.clone();
+            move |_, _, cx| {
+                workspace.update(cx, |ws, cx| ws.checkout_commit(oid, cx)).ok();
+            }
+        }),
+    );
+
+    menu = menu.separator();
+
+    // Create branch / tag here (name dialogs)
+    menu =
+        menu.item(PopupMenuItem::new("Create branch here").icon(IconName::GitBranch).on_click({
+            let workspace = workspace.clone();
+            let summary = summary.to_owned();
+            move |_, window, cx| {
+                workspace
+                    .update(cx, |ws, cx| ws.open_create_branch_dialog(oid, &summary, window, cx))
+                    .ok();
+            }
+        }));
+    menu = menu.item(PopupMenuItem::new("Create tag here").icon(IconName::Tag).on_click({
+        let workspace = workspace.clone();
+        let summary = summary.to_owned();
+        move |_, window, cx| {
+            workspace
+                .update(cx, |ws, cx| ws.open_create_tag_dialog(oid, &summary, window, cx))
+                .ok();
+        }
+    }));
+
+    menu
 }
 
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {

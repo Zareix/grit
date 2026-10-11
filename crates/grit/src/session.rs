@@ -98,6 +98,12 @@ impl Session {
         self.persist(cx);
     }
 
+    /// ⌘W handler wrapper: close whichever tab is currently active.
+    pub(crate) fn close_active_tab(&mut self, cx: &mut Context<Self>) {
+        let active = self.active.min(self.tabs.len().saturating_sub(1));
+        self.close_tab(active, cx);
+    }
+
     /// Close button on a tab; the strip never runs empty (picker fallback).
     pub(crate) fn close_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
         if ix >= self.tabs.len() {

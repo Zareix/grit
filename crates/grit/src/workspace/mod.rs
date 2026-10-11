@@ -5,7 +5,7 @@
 mod actions;
 mod components;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use gpui_kit::component::{
@@ -13,7 +13,9 @@ use gpui_kit::component::{
     diff::{DiffMode, DiffState},
     h_resizable,
     input::{InputEvent, InputState},
-    resizable_panel, v_resizable,
+    resizable_panel,
+    tree::{TreeEvent, TreeState},
+    v_resizable,
 };
 use gpui_kit::*;
 use grit_core::{
@@ -56,6 +58,16 @@ pub enum CopyPath {
     Name,
 }
 
+/// What the "create here" dialog (shared name input) will build, once the
+/// user confirms a name for the commit it targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateTarget {
+    /// A new local branch pointing at the commit.
+    Branch(Oid),
+    /// A new tag pointing at the commit.
+    Tag(Oid),
+}
+
 pub struct Workspace {
     repo: Option<Repo>,
     /// Source of truth for counts / commit button state.
@@ -64,6 +76,11 @@ pub struct Workspace {
     /// Inline "new branch" input, toggled by the + button.
     branch_input: Entity<InputState>,
     creating_branch: bool,
+    /// Name input of the shared "create here" dialog (branch / tag at a
+    /// commit); its Enter press confirms through `confirm_create_here`.
+    name_input: Entity<InputState>,
+    /// What `confirm_create_here` builds, set when the dialog opens.
+    pending_create: Option<CreateTarget>,
     /// Currently selected file (shown in the diff view).
     selected_path: Option<PathBuf>,
     /// Whether the selected file's diff is the staged one (HEAD -> index).
@@ -75,6 +92,12 @@ pub struct Workspace {
     branches: Vec<Branch>,
     current_branch: Option<Branch>,
     tags: Vec<Tag>,
+    /// Remote branches rendered as a tree (`origin` → folders → leaves);
+    /// rebuilt from `branches` on every refresh.
+    remote_tree: Entity<TreeState>,
+    /// Remote-tree folder ids the user collapsed (everything is expanded by
+    /// default; fresh `TreeItem`s are collapsed, so reapply this on refresh).
+    remote_collapsed: HashSet<String>,
     /// Refs (branches + tags) grouped by the commit they point to, for the
     /// log's ref chips.
     refs_by_commit: HashMap<Oid, Vec<CommitRef>>,
@@ -117,10 +140,29 @@ impl Workspace {
                     this.create_branch(window, cx);
                 }
             });
+        let name_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Name…").clean_on_escape());
+        let name_enter_subscription =
+            cx.subscribe_in(&name_input, window, |this, _, event, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.confirm_create_here(window, cx);
+                }
+            });
 
         let layout = cx.new(|_| ResizableState::default());
         let center_layout = cx.new(|_| ResizableState::default());
         let diff = cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Unified));
+        let remote_tree = cx.new(|cx| TreeState::new(cx).items(Vec::new()));
+        // Track collapse/expand so rebuilds (every refresh) keep the user's
+        // expansion state; items render expanded unless recorded here.
+        let tree_subscription = cx.subscribe(&remote_tree, |this, _, event, _cx| match event {
+            TreeEvent::Collapsed(id) => {
+                this.remote_collapsed.insert(id.to_string());
+            }
+            TreeEvent::Expanded(id) => {
+                this.remote_collapsed.remove(id.as_ref());
+            }
+        });
 
         let mut this = Self {
             repo: None,
@@ -128,6 +170,8 @@ impl Workspace {
             message,
             branch_input,
             creating_branch: false,
+            name_input,
+            pending_create: None,
             selected_path: None,
             selected_staged: false,
             diff,
@@ -135,6 +179,8 @@ impl Workspace {
             branches: Vec::new(),
             current_branch: None,
             tags: Vec::new(),
+            remote_tree,
+            remote_collapsed: HashSet::new(),
             refs_by_commit: HashMap::new(),
             layout,
             center_layout,
@@ -146,7 +192,7 @@ impl Workspace {
             diff_from_commit: false,
             diff_open: false,
             error: None,
-            _subscriptions: vec![enter_subscription],
+            _subscriptions: vec![enter_subscription, name_enter_subscription, tree_subscription],
         };
         this.open(path, cx);
         this
