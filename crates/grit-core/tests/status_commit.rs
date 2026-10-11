@@ -120,3 +120,35 @@ fn commit_log_newest_first() {
     assert_eq!(log[0].id, c2);
     assert_eq!(log[1].id, c1);
 }
+
+#[test]
+fn discard_resets_head_tracked_file() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("init");
+
+    // Modified in the workdir AND staged: discard returns the file to HEAD
+    // on both levels.
+    t.write("a.txt", "changed");
+    t.repo.stage_file("a.txt").unwrap();
+    t.repo.discard_file("a.txt").unwrap();
+
+    assert_eq!(t.read("a.txt"), "1");
+    let status = t.repo.status().unwrap();
+    assert!(status.is_empty(), "dirty after discard: {status:?}");
+}
+
+#[test]
+fn discard_removes_untracked_file_even_when_staged() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("init");
+
+    // Never committed: staged -> discard deletes it and cleans the index.
+    t.write_and_stage("b.txt", "new");
+    t.repo.discard_file("b.txt").unwrap();
+
+    assert!(!t.repo.path.join("b.txt").exists());
+    let status = t.repo.status().unwrap();
+    assert!(status.is_empty(), "dirty after discard: {status:?}");
+}

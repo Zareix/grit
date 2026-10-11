@@ -16,7 +16,17 @@ use crate::session::Session;
 // fallback below.
 icon_assets!(
     ExtraIcons,
-    [ArrowDown, ArrowUp, CloudDownload, Code, EllipsisVertical, FileCode, GitCommitHorizontal]
+    [
+        ArrowDown,
+        ArrowUp,
+        CloudDownload,
+        Code,
+        EllipsisVertical,
+        FileCode,
+        GitCommitHorizontal,
+        RotateCcw,
+        Trash
+    ]
 );
 
 /// Composite asset source: app icons first, then the default component set.
@@ -64,7 +74,20 @@ fn main() {
         // TitleBar::window_options() gives the app a custom title bar drawn
         // by the TitleBar element itself (tabs align with the native window
         // buttons; on macOS the traffic lights sit at (9, 9)).
-        open_window(TitleBar::window_options(), cx, move |window, cx| {
+        let mut options = TitleBar::window_options();
+        // Open at ~80% of the screen, centered on it but nudged upward so
+        // the macOS dock does not overlap the bottom of the window.
+        const DOCK_NUDGE: f32 = 32.0;
+        options.window_bounds = cx.primary_display().map(|display| {
+            let screen = display.bounds();
+            let size = size(screen.size.width * 0.8, screen.size.height * 0.8);
+            let origin = point(
+                screen.origin.x + (screen.size.width - size.width) / 2.,
+                screen.origin.y + (screen.size.height - size.height) / 2. - px(DOCK_NUDGE),
+            );
+            WindowBounds::Windowed(Bounds { origin, size })
+        });
+        open_window(options, cx, move |window, cx| {
             cx.new(|cx| Session::new(repo_path.clone(), window, cx))
         })
         .expect("failed to open window");

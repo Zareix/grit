@@ -1,0 +1,40 @@
+//! Tags.
+
+use git2::Oid;
+
+use crate::error::Result;
+use crate::repo::Repo;
+
+/// A tag (lightweight or annotated), peeled to its target commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tag {
+    pub name: String,
+    /// The commit the tag points to (peeled through annotated tags).
+    pub target: Oid,
+}
+
+impl Repo {
+    /// All tags, sorted by name.
+    pub fn tags(&self) -> Result<Vec<Tag>> {
+        let repo = self.git2()?;
+        let mut out = Vec::new();
+
+        for reference in repo.references_glob("refs/tags/*")? {
+            let reference = reference?;
+            let name = reference.shorthand().ok().unwrap_or_default().to_owned();
+            if name.is_empty() {
+                continue;
+            }
+            // Peel annotated tags down to the commit; unresolved targets are
+            // skipped rather than surfaced as dangling entries.
+            let target = match reference.peel_to_commit() {
+                Ok(commit) => commit.id(),
+                Err(_) => continue,
+            };
+            out.push(Tag { name: name.to_owned(), target });
+        }
+
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+}

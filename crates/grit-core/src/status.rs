@@ -201,4 +201,36 @@ impl Repo {
         repo.reset(head_commit.as_object(), git2::ResetType::Mixed, None)?;
         Ok(())
     }
+
+    /// Discard every local change to a file (both staged and unstaged): a
+    /// path tracked by HEAD goes back to HEAD (index and worktree), every
+    /// other path — untracked, staged or not — is dropped from the index
+    /// and deleted from the working tree.
+    pub fn discard_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        let repo = self.git2()?;
+        let path = path.as_ref();
+        let tracked = repo
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_tree().ok())
+            .and_then(|tree| tree.get_path(path).ok())
+            .is_some();
+
+        if !tracked {
+            // Fresh files: gone from disk, and off the index when staged.
+            std::fs::remove_file(self.path.join(path)).ok();
+            let mut index = repo.index()?;
+            if index.get_path(path, 0).is_some() {
+                index.remove_path(path)?;
+                index.write()?;
+            }
+            return Ok(());
+        }
+
+        // `git checkout HEAD -- <path>`: reset index and worktree together.
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force().update_index(true).path(path);
+        repo.checkout_head(Some(&mut checkout))?;
+        Ok(())
+    }
 }

@@ -5,6 +5,7 @@
 mod actions;
 mod components;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui_kit::component::{
@@ -16,15 +17,44 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 use grit_core::{
-    Repo,
+    Oid, Repo,
     branch::Branch,
     commit::Commit,
     status::{FileEntry, Status},
+    tags::Tag,
 };
 
 use self::components::{
     branches, commit_details, diff_view, history, staging, status_bar, toolbar,
 };
+
+/// A ref (branch or tag) pointing at a commit, shown as a chip in the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitRef {
+    pub name: SharedString,
+    pub kind: CommitRefKind,
+    /// The checked-out branch (rendered with extra emphasis).
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitRefKind {
+    Local,
+    Remote,
+    Tag,
+}
+
+/// Which part of a file path the "Copy file path" submenu puts on the
+/// clipboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyPath {
+    /// `<repo root>/<relative path>`
+    Absolute,
+    /// Relative to the repository root, like git prints it.
+    Relative,
+    /// Only the file name.
+    Name,
+}
 
 pub struct Workspace {
     repo: Option<Repo>,
@@ -44,6 +74,10 @@ pub struct Workspace {
     log: Vec<Commit>,
     branches: Vec<Branch>,
     current_branch: Option<Branch>,
+    tags: Vec<Tag>,
+    /// Refs (branches + tags) grouped by the commit they point to, for the
+    /// log's ref chips.
+    refs_by_commit: HashMap<Oid, Vec<CommitRef>>,
     /// Horizontal panel layout: branches | center | staging.
     layout: Entity<ResizableState>,
     /// Vertical split of the center column: history | diff.
@@ -52,10 +86,9 @@ pub struct Workspace {
     remote_busy: Option<&'static str>,
     /// Transient success/info message for the status bar.
     info: Option<SharedString>,
-    /// Branch whose history is shown in the center column (None = HEAD).
-    viewed_branch: Option<SharedString>,
-    /// Log of `viewed_branch`, refreshed along with `status`.
-    branch_log: Vec<Commit>,
+    /// Scroll position of the commit log; branch clicks scroll the list to
+    /// the branch tip through this.
+    log_scroll: UniformListScrollHandle,
     /// Commit selected in the history (its details replace the staging panel).
     selected_commit: Option<Commit>,
     /// Files changed by the selected commit.
@@ -101,12 +134,13 @@ impl Workspace {
             log: Vec::new(),
             branches: Vec::new(),
             current_branch: None,
+            tags: Vec::new(),
+            refs_by_commit: HashMap::new(),
             layout,
             center_layout,
             remote_busy: None,
             info: None,
-            viewed_branch: None,
-            branch_log: Vec::new(),
+            log_scroll: UniformListScrollHandle::new(),
             selected_commit: None,
             commit_files: Vec::new(),
             diff_from_commit: false,
@@ -153,7 +187,7 @@ impl Render for Workspace {
                                 .child(resizable_panel().child(history::render(self, cx)))
                                 .child(
                                     resizable_panel()
-                                        .size(px(400.))
+                                        .size(px(520.))
                                         .flex_none()
                                         .size_range(px(120.)..gpui::Pixels::MAX)
                                         .visible(self.selected_path.is_some())

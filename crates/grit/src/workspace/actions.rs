@@ -1,6 +1,7 @@
 //! Workspace actions: everything the UI can trigger on the model.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _,
@@ -10,11 +11,20 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::*;
-use grit_core::{Oid, RemoteOp, Repo};
+use grit_core::{Oid, RemoteOp, Repo, branch::BranchType};
 
-use super::Workspace;
+use super::{CommitRef, CommitRefKind, CopyPath, Workspace};
 
 const MAX_LOG_COMMITS: usize = 500;
+
+/// Text payload of a destructive-action confirm dialog (see
+/// [`Workspace::open_confirm_dialog`]).
+struct ConfirmSpec {
+    title: &'static str,
+    question: String,
+    detail: String,
+    confirm_label: &'static str,
+}
 
 impl Workspace {
     pub(crate) fn open(&mut self, path: String, cx: &mut Context<Self>) {
@@ -42,15 +52,17 @@ impl Workspace {
             repo.status(),
             repo.branches(),
             repo.current_branch(),
-            repo.commit_log(MAX_LOG_COMMITS),
+            repo.tags(),
+            repo.commit_log_all(MAX_LOG_COMMITS),
         ) {
-            (Ok(status), Ok(branches), Ok(current), Ok(log)) => {
+            (Ok(status), Ok(branches), Ok(current), Ok(tags), Ok(log)) => {
                 self.status = status;
                 self.branches = branches;
                 self.current_branch = current;
+                self.tags = tags;
                 self.log = log;
+                self.rebuild_refs();
                 self.error = None;
-                self.sync_viewed_branch(&repo);
                 self.sync_selection(&repo, cx);
             }
             _ => {
@@ -60,40 +72,58 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Re-read the branch log of the viewed branch; stop viewing branches
-    /// that no longer exist.
-    pub(crate) fn sync_viewed_branch(&mut self, repo: &Repo) {
-        let Some(name) = self.viewed_branch.clone() else {
+    /// Regroup branches + tags by the commit they point at, for the log's
+    /// ref chips. Per commit: local branches first, then tags, then remotes.
+    pub(crate) fn rebuild_refs(&mut self) {
+        self.refs_by_commit.clear();
+        let current = self.current_branch.as_ref().map(|b| b.name.clone());
+
+        for branch in &self.branches {
+            let kind = match branch.kind {
+                BranchType::Local => CommitRefKind::Local,
+                BranchType::Remote => CommitRefKind::Remote,
+            };
+            self.refs_by_commit.entry(branch.head).or_default().push(CommitRef {
+                name: branch.name.clone().into(),
+                kind,
+                is_current: current.as_deref() == Some(branch.name.as_str()),
+            });
+        }
+        for tag in &self.tags {
+            self.refs_by_commit.entry(tag.target).or_default().push(CommitRef {
+                name: tag.name.clone().into(),
+                kind: CommitRefKind::Tag,
+                is_current: false,
+            });
+        }
+        for refs in self.refs_by_commit.values_mut() {
+            refs.sort_by_key(|r| match r.kind {
+                CommitRefKind::Local => 0,
+                CommitRefKind::Tag => 1,
+                CommitRefKind::Remote => 2,
+            });
+        }
+    }
+
+    /// Click on a branch: scroll the commit log to its tip commit. The log
+    /// covers every ref, so tips are normally in it; an older-than-window
+    /// tip (beyond `MAX_LOG_COMMITS`) surfaces an info message instead.
+    pub(crate) fn reveal_branch(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(tip) = self.branches.iter().find(|b| b.name == name).map(|b| b.head) else {
             return;
         };
-        match repo.commit_log_ref(&name, MAX_LOG_COMMITS) {
-            Ok(log) => self.branch_log = log,
-            Err(_) => {
-                self.viewed_branch = None;
-                self.branch_log.clear();
+        match self.log.iter().position(|c| c.id == tip) {
+            Some(ix) => {
+                self.log_scroll.scroll_to_item(ix, ScrollStrategy::Center);
+                cx.notify();
             }
-        }
-    }
-
-    /// Click on a branch: show its history without checking it out. Clicking
-    /// the current branch (or the already-viewed one) goes back to the
-    /// default view of the current branch's history.
-    pub(crate) fn view_branch(&mut self, name: &str, cx: &mut Context<Self>) {
-        let is_current = self.current_branch.as_ref().is_some_and(|c| c.name == name);
-        if is_current || self.viewed_branch.as_deref() == Some(name) {
-            self.view_branch_current(cx);
-        } else if let Some(repo) = self.repo.clone() {
-            self.viewed_branch = Some(name.to_string().into());
-            self.branch_log =
-                repo.commit_log_ref(name, MAX_LOG_COMMITS).unwrap_or_else(|_| self.log.clone());
-        }
-        cx.notify();
-    }
-
-    /// Return the center column to the current branch's history (HEAD).
-    pub(crate) fn view_branch_current(&mut self, cx: &mut Context<Self>) {
-        if self.viewed_branch.take().is_some() {
-            cx.notify();
+            None => {
+                self.info = Some(
+                    format!("\"{name}\" tip is older than the {MAX_LOG_COMMITS} commits shown")
+                        .into(),
+                );
+                cx.notify();
+            }
         }
     }
 
@@ -241,6 +271,144 @@ impl Workspace {
             self.error = Some(e.to_string().into());
         }
         self.refresh(cx);
+    }
+
+    /// Discard every local change to a file (staged + unstaged). Only called
+    /// from the confirm dialog.
+    pub(crate) fn discard_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        if let Err(e) = repo.discard_file(&path) {
+            self.error = Some(e.to_string().into());
+        }
+        self.refresh(cx);
+    }
+
+    /// Remove the file from the working tree; a tracked file shows up as an
+    /// unstaged deletion. Only called from the confirm dialog.
+    pub(crate) fn delete_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        if let Err(e) = std::fs::remove_file(repo.path.join(&path)) {
+            self.error = Some(e.to_string().into());
+            cx.notify();
+            return;
+        }
+        self.refresh(cx);
+    }
+
+    /// Copy part of a file path to the clipboard (submenu choice).
+    pub(crate) fn copy_file_path(&mut self, part: CopyPath, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let text = match part {
+            CopyPath::Absolute => repo.path.join(&path).to_string_lossy().into_owned(),
+            CopyPath::Relative => {
+                // Paths from the status walk are already repo-root relative;
+                // normalize so display and clipboard agree.
+                Path::new(&path).components().collect::<PathBuf>().to_string_lossy().into_owned()
+            }
+            CopyPath::Name => path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned()),
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        self.info = Some(format!("Copied: {text}").into());
+        cx.notify();
+    }
+
+    /// Reveal the file in Finder (`open -R`), on the background executor.
+    pub(crate) fn show_in_finder(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let abs = repo.path.join(&path);
+        let job = cx.background_spawn(async move {
+            match std::process::Command::new("open").args(["-R", &abs.to_string_lossy()]).status() {
+                Ok(status) if status.success() => Ok(()),
+                Ok(status) => Err(format!("open -R failed with {status}")),
+                Err(e) => Err(e.to_string()),
+            }
+        });
+        self.run_launcher("show in finder", job, cx);
+    }
+
+    /// Discard confirm dialog: both staged and unstaged changes are lost.
+    pub(crate) fn open_discard_dialog(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let display = path.to_string_lossy().into_owned();
+        let owned = path.clone();
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Discard changes?",
+                question: format!("Discard all changes to \"{display}\"?"),
+                detail: "Both staged and unstaged changes are lost. This cannot be undone.".into(),
+                confirm_label: "Discard",
+            },
+            move |ws, cx| ws.discard_file(owned.clone(), cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Delete confirm dialog: the file leaves the working tree.
+    pub(crate) fn open_delete_dialog(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let display = path.to_string_lossy().into_owned();
+        let owned = path.clone();
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Delete file?",
+                question: format!("Delete \"{display}\" from the working tree?"),
+                detail: "It stays recoverable from history if it was previously committed.".into(),
+                confirm_label: "Delete",
+            },
+            move |ws, cx| ws.delete_file(owned.clone(), cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Shared destructive-action confirm dialog: Cancel + danger confirmation
+    /// button that runs `action`. Same shape as the set-upstream dialog.
+    fn open_confirm_dialog(
+        &mut self,
+        spec: ConfirmSpec,
+        action: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.entity().downgrade();
+        let action = Rc::new(action);
+        window.open_dialog(cx, move |dialog, _, dialog_cx| {
+            let weak = weak.clone();
+            let action = action.clone();
+            dialog
+                .title(spec.title)
+                .child(v_flex().gap_2().child(spec.question.clone()).child(
+                    div().text_color(dialog_cx.theme().muted_foreground).child(spec.detail.clone()),
+                ))
+                // 0.7.1: footer takes a value; build ours (see set-upstream).
+                .footer(
+                    DialogFooter::new()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(Button::new("confirm").danger().label(spec.confirm_label).on_click(
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                                weak.update(cx, |ws, cx| action(ws, cx)).ok();
+                            },
+                        )),
+                )
+        });
     }
 
     pub(crate) fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {

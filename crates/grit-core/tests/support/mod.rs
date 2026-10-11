@@ -47,7 +47,7 @@ impl TestRepo {
         std::fs::write(path, content).expect("write file");
     }
 
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     pub fn read(&self, rel: &str) -> String {
         std::fs::read_to_string(self.repo.path.join(rel)).expect("read file")
     }
@@ -56,5 +56,14 @@ impl TestRepo {
     #[allow(dead_code)]
     pub fn commit(&self, message: &str) -> git2::Oid {
         self.repo.commit(message).expect("commit")
+    }
+
+    /// Create a lightweight tag at the given commit.
+    #[allow(dead_code)]
+    pub fn tag(&self, name: &str, target: git2::Oid) {
+        let repo = git2::Repository::open(self.repo.path.clone()).expect("open git2 repo");
+        let sig = git2::Signature::now("Test User", "test@example.com").expect("signature");
+        repo.tag(name, &repo.find_object(target, None).expect("object"), &sig, "test: tag", true)
+            .expect("create tag");
     }
 }

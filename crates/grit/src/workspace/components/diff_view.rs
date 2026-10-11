@@ -12,6 +12,14 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
+/// Whether `path` has a viewable image extension (per GPUI's `img` list).
+pub(crate) fn is_viewable_image(path: &std::path::Path) -> bool {
+    let extensions = Img::extensions();
+    path.extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .is_some_and(|e| extensions.contains(&e.as_str()))
+}
+
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
@@ -27,6 +35,9 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     // file has no rows (binary change, pure rename…), so the viewer renders
     // whenever files are installed; "No changes" only for a truly empty diff.
     let has_files = !ws.diff.read(cx).files().is_empty();
+    // Image files show a live preview instead of the (binary) patch. The file
+    // must exist: a deletion leaves no image to display.
+    let is_image = is_viewable_image(path) && path.is_file();
 
     let source = if ws.diff_from_commit {
         match &ws.selected_commit {
@@ -108,9 +119,12 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                         ),
                 ),
         )
-        // body: the Diff component owns its scrolling; do not nest another
-        // scrollable region (unified rows, or two columns in split).
-        .child(div().flex_1().min_h_0().child(if has_files {
+        // body: image preview for image files (no diff), otherwise the Diff
+        // component, which owns its scrolling; do not nest another scrollable
+        // region (unified rows, or two columns in split).
+        .child(div().flex_1().min_h_0().child(if is_image {
+            image_preview(path).into_any_element()
+        } else if has_files {
             Diff::new(&ws.diff)
                 .hunk_separator(DiffHunkSeparator::LineInfo)
                 .soft_wrap(true)
@@ -126,6 +140,22 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .child("No changes")
                 .into_any_element()
         }))
+}
+
+/// Centered, size-constrained preview of an image file on disk. GPUI's `img`
+/// loads and decodes the file asynchronously with its own asset cache and
+/// `ObjectFit::Contain` by default, so the image scales to the available
+/// space without overflowing.
+fn image_preview(path: &std::path::Path) -> impl IntoElement {
+    div()
+        .flex_1()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .p_4()
+        .overflow_hidden()
+        .child(img(path.to_path_buf()).max_w_full().max_h_full())
 }
 
 impl Workspace {

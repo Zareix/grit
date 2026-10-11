@@ -1,8 +1,8 @@
 //! Left column: local / remote branches.
 //!
-//! Click a branch to browse its history (no checkout). The menu button,
-//! revealed on hover, gives checkout / pull / set-upstream / delete; the same
-//! menu is available on right-click (context menu).
+//! Click a branch to scroll the commit log to its tip (no checkout). The
+//! menu button, revealed on hover, gives checkout / pull / set-upstream /
+//! delete; the same menu is available on right-click (context menu).
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -92,12 +92,6 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .overflow_y_scroll()
                 .p_1()
                 .gap_0p5()
-                // Double-click on empty space: back to the current branch's history.
-                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                    if event.click_count() >= 2 && this.viewed_branch.is_some() {
-                        this.view_branch_current(cx);
-                    }
-                }))
                 .child(SectionLabel::new("LOCAL", cx))
                 .children(local_rows)
                 .child(div().mt_2().child(SectionLabel::new("REMOTES", cx)))
@@ -105,10 +99,9 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         )
 }
 
-/// Row click = view this branch's history. Menu button (hover) = actions.
+/// Row click = scroll the log to this branch's tip. Menu button (hover) = actions.
 fn branch_row_shell(
     branch: &Branch,
-    ws: &Workspace,
     cx: &mut Context<Workspace>,
     foreground: gpui_kit::Hsla,
     is_current: bool,
@@ -117,25 +110,22 @@ fn branch_row_shell(
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
     let name = branch.name.clone();
-    let is_viewed = ws.viewed_branch.as_deref() == Some(name.as_str());
 
-    // Only the name area opens the branch's history; the right slot keeps the
-    // badge and menu button outside the clickable area.
+    // Only the name area reveals the branch in the log; the right slot keeps
+    // the badge and menu button outside the clickable area.
     let click_area = h_flex()
         .id(SharedString::from(format!("branch-{name}")))
         .flex_1()
         .min_w_0()
         .items_center()
         .gap_1p5()
-        .when(!is_viewed, |this| this.cursor_pointer())
+        .cursor_pointer()
         .on_click(cx.listener({
             let name = name.clone();
-            move |this, _, _, cx| this.view_branch(&name, cx)
+            move |this, _, _, cx| this.reveal_branch(&name, cx)
         }))
         .child(Icon::new(IconName::GitBranch).size_3().text_color(if is_current {
             cx.theme().primary
-        } else if is_viewed {
-            cx.theme().info
         } else {
             muted
         }))
@@ -159,8 +149,7 @@ fn branch_row_shell(
         .rounded_sm()
         .text_size(px(12.))
         .group("branch-row")
-        .when(is_viewed, |this| this.bg(cx.theme().accent.opacity(0.3)))
-        .when(!is_viewed, |this| this.hover(|style| style.bg(border.opacity(0.4))))
+        .hover(|style| style.bg(border.opacity(0.4)))
         .child(click_area);
 
     if !with_menu {
@@ -258,13 +247,13 @@ fn local_branch_row(
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let is_current = ws.current_branch.as_ref().is_some_and(|c| c.name == branch.name);
-    branch_row_shell(branch, ws, cx, cx.theme().foreground, is_current, true)
+    branch_row_shell(branch, cx, cx.theme().foreground, is_current, true)
 }
 
 fn remote_branch_row(
-    ws: &Workspace,
+    _ws: &Workspace,
     branch: &Branch,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
-    branch_row_shell(branch, ws, cx, cx.theme().muted_foreground, false, false)
+    branch_row_shell(branch, cx, cx.theme().muted_foreground, false, false)
 }

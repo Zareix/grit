@@ -9,6 +9,7 @@ pub mod error;
 pub mod remote;
 pub mod repo;
 pub mod status;
+pub mod tags;
 
 pub use branch::Branch;
 pub use commit::Commit;
@@ -18,3 +19,4 @@ pub use remote::RemoteOp;
 pub use repo::Repo;
 pub use status::FileEntry;
 pub use status::Status;
+pub use tags::Tag;

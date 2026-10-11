@@ -6,13 +6,15 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex,
+    menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+    v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use grit_core::status::FileEntry;
 
-use crate::workspace::Workspace;
+use crate::workspace::{CopyPath, Workspace};
 
 use super::commit_box;
 use super::primitives::KindBadge;
@@ -95,7 +97,7 @@ fn file_list(
         range
             .map(|ix| match entries.get(ix) {
                 Some(entry) => file_row(ws, entry, staged, colors, workspace.clone()),
-                None => div().id(format!("{id}-empty-{ix}")),
+                None => div().id(format!("{id}-empty-{ix}")).into_any_element(),
             })
             .collect()
     })
@@ -110,14 +112,15 @@ fn file_list(
 
 /// A file on two lines: file name on top, parent path below (when not at the
 /// repo root). Fixed height; the badge and stage button are vertically
-/// centered across the whole row.
+/// centered across the whole row. Returns `AnyElement` because the
+/// context-menu wrapper layers an extra element on top of the row.
 fn file_row(
     ws: &Workspace,
     entry: &FileEntry,
     staged: bool,
     colors: Colors,
     workspace: WeakEntity<Workspace>,
-) -> Stateful<Div> {
+) -> gpui_kit::AnyElement {
     let Colors { border, muted, foreground, accent, success, info, danger } = colors;
 
     let name = entry
@@ -199,6 +202,84 @@ fn file_row(
                 workspace.update(cx, |ws, cx| ws.toggle_file(path.clone(), staged, cx)).ok();
             }
         }))
+        // right-click: same command + destructive actions (confirm dialogs)
+        // + file-system conveniences
+        .context_menu({
+            let path = path.clone();
+            move |menu, window, cx| file_menu(menu, &path, staged, &workspace, window, cx)
+        })
+        .into_any_element()
+}
+
+/// Right-click menu on a staging file row: the state command, destructive
+/// actions (each behind a confirm dialog), then file-system conveniences.
+fn file_menu(
+    mut menu: PopupMenu,
+    path: &std::path::Path,
+    staged: bool,
+    workspace: &WeakEntity<Workspace>,
+    window: &mut Window,
+    cx: &mut App,
+) -> PopupMenu {
+    // "Copy file path" opens a submenu with the three path spellings.
+    let copy_paths = PopupMenu::build(window, cx, |mut menu, _, _| {
+        for (part, label) in [
+            (CopyPath::Absolute, "Absolute path"),
+            (CopyPath::Relative, "Relative"),
+            (CopyPath::Name, "File name"),
+        ] {
+            menu = menu.item(PopupMenuItem::new(label).on_click({
+                let workspace = workspace.clone();
+                let path = path.to_owned();
+                move |_, _, cx| {
+                    workspace.update(cx, |ws, cx| ws.copy_file_path(part, path.clone(), cx)).ok();
+                }
+            }));
+        }
+        menu
+    });
+
+    menu = menu
+        .item(
+            PopupMenuItem::new(if staged { "Unstage" } else { "Stage" })
+                .icon(if staged { IconName::Minus } else { IconName::Plus })
+                .on_click({
+                    let workspace = workspace.clone();
+                    let path = path.to_owned();
+                    move |_, _, cx| {
+                        workspace
+                            .update(cx, |ws, cx| ws.toggle_file(path.clone(), staged, cx))
+                            .ok();
+                    }
+                }),
+        )
+        .item(PopupMenuItem::new("Discard changes").icon(IconName::RotateCcw).on_click({
+            let workspace = workspace.clone();
+            let path = path.to_owned();
+            move |_, window, cx| {
+                workspace
+                    .update(cx, |ws, cx| ws.open_discard_dialog(path.clone(), window, cx))
+                    .ok();
+            }
+        }))
+        .separator()
+        .item(PopupMenuItem::new("Show in Finder").icon(IconName::ExternalLink).on_click({
+            let workspace = workspace.clone();
+            let path = path.to_owned();
+            move |_, _, cx| {
+                workspace.update(cx, |ws, cx| ws.show_in_finder(path.clone(), cx)).ok();
+            }
+        }))
+        .item(PopupMenuItem::submenu("Copy file path", copy_paths).icon(IconName::Copy))
+        .separator()
+        .item(PopupMenuItem::new("Delete File").icon(IconName::Trash).on_click({
+            let workspace = workspace.clone();
+            let path = path.to_owned();
+            move |_, window, cx| {
+                workspace.update(cx, |ws, cx| ws.open_delete_dialog(path.clone(), window, cx)).ok();
+            }
+        }));
+    menu
 }
 
 /// Fixed section header: title + count + stage/unstage-all command. Always

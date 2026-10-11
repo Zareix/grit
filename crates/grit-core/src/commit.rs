@@ -81,22 +81,12 @@ impl Repo {
         revwalk.push(oid)?;
         revwalk.set_sorting(git2::Sort::TIME)?;
 
-        let mut out = Vec::with_capacity(limit.min(64));
-        for oid in revwalk.take(limit) {
-            let c = repo.find_commit(oid?)?;
-            out.push(Commit {
-                id: c.id(),
-                summary: c.summary().ok().flatten().unwrap_or_default().to_owned(),
-                message: c.message().ok().map(str::to_owned),
-                author: signature_to_owned(c.author(), c.time()),
-                committer: signature_to_owned(c.committer(), c.time()),
-                parents: c.parent_ids().collect(),
-            })
-        }
-        Ok(out)
+        collect_commits(&repo, revwalk, limit)
     }
 
     /// Recent commits, newest first (order is git's default: reverse chrono).
+    /// Full walk: merge commits and side branches are all included, which the
+    /// graph view needs.
     pub fn commit_log(&self, limit: usize) -> Result<Vec<Commit>> {
         let repo = self.git2()?;
         let head = match repo.head().ok().and_then(|h| h.peel_to_commit().ok()) {
@@ -107,23 +97,39 @@ impl Repo {
         let mut revwalk = repo.revwalk()?;
         revwalk.push(head.id())?;
         revwalk.set_sorting(git2::Sort::TIME)?;
-        // Simplify history to first-parents only for a linear view.
-        revwalk.simplify_first_parent()?;
 
-        let mut out = Vec::with_capacity(limit.min(64));
-        for oid in revwalk.take(limit) {
-            let oid = oid?;
-            let c = repo.find_commit(oid)?;
-            out.push(Commit {
-                id: c.id(),
-                summary: c.summary().ok().flatten().unwrap_or_default().to_owned(),
-                message: c.message().ok().map(str::to_owned),
-                author: signature_to_owned(c.author(), c.time()),
-                committer: signature_to_owned(c.committer(), c.time()),
-                parents: c.parent_ids().collect(),
-            });
+        collect_commits(&repo, revwalk, limit)
+    }
+
+    /// Recent commits across every ref (HEAD, all branches, all tags),
+    /// newest first by committer time. The graph shows the whole constellation:
+    /// commits that live only on other branches — stale remote tips in
+    /// particular — must appear too, carrying their ref chips.
+    pub fn commit_log_all(&self, limit: usize) -> Result<Vec<Commit>> {
+        let repo = self.git2()?;
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(git2::Sort::TIME)?;
+
+        // HEAD (skipped when unborn: empty repo, detached infant state).
+        if let Some(head) = repo.head().ok().and_then(|h| h.peel_to_commit().ok()) {
+            revwalk.push(head.id())?;
         }
-        Ok(out)
+        // Unborn branches (fresh `git branch` with no commits) fail to peel:
+        // skipping them is correct, they point at no history yet.
+        for branch in repo.branches(None)? {
+            let (branch, _) = branch?;
+            if let Ok(commit) = branch.get().peel_to_commit() {
+                revwalk.push(commit.id())?;
+            }
+        }
+        for reference in repo.references_glob("refs/tags/*")? {
+            let reference = reference?;
+            if let Ok(commit) = reference.peel_to_commit() {
+                revwalk.push(commit.id())?;
+            }
+        }
+
+        collect_commits(&repo, revwalk, limit)
     }
 
     /// Signature to use for a new commit, from global/local git config.
@@ -146,6 +152,27 @@ fn signature_to_owned(sig: git2::Signature<'_>, time: git2::Time) -> Signature {
         email: sig.email().unwrap_or_default().to_owned(),
         time,
     }
+}
+
+/// Drain a configured revwalk into `Commit`s, at most `limit` of them.
+fn collect_commits(
+    repo: &git2::Repository,
+    revwalk: git2::Revwalk<'_>,
+    limit: usize,
+) -> Result<Vec<Commit>> {
+    let mut out = Vec::with_capacity(limit.min(64));
+    for oid in revwalk.take(limit) {
+        let c = repo.find_commit(oid?)?;
+        out.push(Commit {
+            id: c.id(),
+            summary: c.summary().ok().flatten().unwrap_or_default().to_owned(),
+            message: c.message().ok().map(str::to_owned),
+            author: signature_to_owned(c.author(), c.time()),
+            committer: signature_to_owned(c.committer(), c.time()),
+            parents: c.parent_ids().collect(),
+        });
+    }
+    Ok(out)
 }
 
 impl Signature {
