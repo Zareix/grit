@@ -113,7 +113,7 @@ jobs:
           xcrun stapler validate grit-aarch64-macos.dmg
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: grit-macos
           path: grit-aarch64-macos.dmg
@@ -138,7 +138,7 @@ jobs:
         run: Compress-Archive -Path target/release/grit.exe -DestinationPath "grit-x64-windows.zip"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: grit-windows
           path: grit-x64-windows.zip
@@ -180,7 +180,7 @@ jobs:
           tar -tzf "grit-x64-linux.tar.gz"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: grit-linux
           path: grit-x64-linux.tar.gz
@@ -191,13 +191,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-macos, build-windows, build-linux]
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: grit-*
           merge-multiple: true
           path: release-assets
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: git_desktop_release
           path: release-assets/*
