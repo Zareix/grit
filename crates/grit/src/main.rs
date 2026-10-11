@@ -26,7 +26,10 @@ icon_assets!(
         FileCode,
         GitCommitHorizontal,
         RotateCcw,
-        Trash
+        Trash,
+        GitBranch,
+        Upload,
+        Download,
     ]
 );
 

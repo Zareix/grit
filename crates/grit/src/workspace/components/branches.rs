@@ -2,7 +2,9 @@
 //!
 //! Click a branch to scroll the commit log to its tip (no checkout). The
 //! menu button, revealed on hover, gives checkout / pull / set-upstream /
-//! delete; the same menu is available on right-click (context menu).
+//! delete; the same menu is available on right-click (context menu). Remote
+//! rows offer their own menu: checkout (as a tracking local branch) and
+//! delete on the server.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -99,13 +101,14 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         )
 }
 
-/// Row click = scroll the log to this branch's tip. Menu button (hover) = actions.
+/// Row click = scroll the log to this branch's tip. Menu button (hover) =
+/// actions; the same menu is available on right-click (context menu).
 fn branch_row_shell(
     branch: &Branch,
     cx: &mut Context<Workspace>,
     foreground: gpui_kit::Hsla,
     is_current: bool,
-    with_menu: bool,
+    remote: bool,
 ) -> gpui_kit::AnyElement {
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
@@ -152,10 +155,6 @@ fn branch_row_shell(
         .hover(|style| style.bg(border.opacity(0.4)))
         .child(click_area);
 
-    if !with_menu {
-        return row.into_any_element();
-    }
-
     let workspace = cx.entity().downgrade();
 
     // Menu button, invisible until the row is hovered.
@@ -169,16 +168,30 @@ fn branch_row_shell(
             .dropdown_menu({
                 let workspace = workspace.clone();
                 let branch = branch.clone();
-                move |menu, _, _| branch_menu(menu, &branch, is_current, &workspace)
+                move |menu, _, _| row_menu(menu, &branch, remote, is_current, &workspace)
             }),
     );
 
     // Same menu on right-click.
     row.context_menu({
         let branch = branch.clone();
-        move |menu, _, _| branch_menu(menu, &branch, is_current, &workspace)
+        move |menu, _, _| row_menu(menu, &branch, remote, is_current, &workspace)
     })
     .into_any_element()
+}
+
+fn row_menu(
+    menu: PopupMenu,
+    branch: &Branch,
+    remote: bool,
+    is_current: bool,
+    workspace: &WeakEntity<Workspace>,
+) -> PopupMenu {
+    if remote {
+        remote_branch_menu(menu, branch, workspace)
+    } else {
+        branch_menu(menu, branch, is_current, workspace)
+    }
 }
 
 fn branch_menu(
@@ -247,7 +260,7 @@ fn local_branch_row(
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let is_current = ws.current_branch.as_ref().is_some_and(|c| c.name == branch.name);
-    branch_row_shell(branch, cx, cx.theme().foreground, is_current, true)
+    branch_row_shell(branch, cx, cx.theme().foreground, is_current, false)
 }
 
 fn remote_branch_row(
@@ -255,5 +268,37 @@ fn remote_branch_row(
     branch: &Branch,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
-    branch_row_shell(branch, cx, cx.theme().muted_foreground, false, false)
+    branch_row_shell(branch, cx, cx.theme().muted_foreground, false, true)
+}
+
+/// Remote rows: checkout as a local tracking branch, and delete the branch
+/// on its server.
+fn remote_branch_menu(
+    mut menu: PopupMenu,
+    branch: &Branch,
+    workspace: &WeakEntity<Workspace>,
+) -> PopupMenu {
+    let name = branch.name.clone();
+
+    // Checkout
+    menu = menu.item(PopupMenuItem::new("Checkout").icon(IconName::GitBranch).on_click({
+        let workspace = workspace.clone();
+        let name = name.clone();
+        move |_, _, cx| {
+            workspace.update(cx, |ws, cx| ws.checkout_remote_branch(&name, cx)).ok();
+        }
+    }));
+
+    menu = menu.separator();
+
+    // Delete (removes the branch from the remote server)
+    menu = menu.item(PopupMenuItem::new("Delete").icon(IconName::Trash).on_click({
+        let workspace = workspace.clone();
+        let name = name.clone();
+        move |_, _, cx| {
+            workspace.update(cx, |ws, cx| ws.delete_remote_branch(&name, cx)).ok();
+        }
+    }));
+
+    menu
 }

@@ -81,3 +81,59 @@ fn delete_branch_guards_current() {
     // Deleting the checked-out branch is refused.
     assert!(t.repo.delete_branch("main").is_err());
 }
+
+#[test]
+fn checkout_remote_branch_creates_tracking_local() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("init");
+    t.write_and_stage("b.txt", "2");
+    let tip = t.commit("second");
+
+    // Fabricate a remote-tracking ref (no network needed).
+    let git_repo = git2::Repository::open(&t.repo.path).unwrap();
+    git_repo.remote("origin", "https://example.com/repo.git").unwrap();
+    git_repo.reference("refs/remotes/origin/feature", tip, true, "test: remote branch").unwrap();
+
+    t.repo.checkout_remote_branch("origin/feature").unwrap();
+    let current = t.repo.current_branch().unwrap().expect("a branch");
+    assert_eq!(current.name, "feature");
+    assert_eq!(current.head, tip);
+    assert_eq!(current.upstream.as_deref(), Some("origin/feature"));
+}
+
+#[test]
+fn checkout_remote_branch_reuses_existing_local() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("init");
+    t.repo.create_branch("feature").unwrap();
+
+    let git_repo = git2::Repository::open(&t.repo.path).unwrap();
+    git_repo.remote("origin", "https://example.com/repo.git").unwrap();
+    let tip = t.repo.current_branch().unwrap().unwrap().head;
+    git_repo.reference("refs/remotes/origin/feature", tip, true, "test: remote branch").unwrap();
+
+    // Local `feature` exists: it is checked out as-is (no upstream rewrite).
+    t.repo.checkout_remote_branch("origin/feature").unwrap();
+    let current = t.repo.current_branch().unwrap().expect("a branch");
+    assert_eq!(current.name, "feature");
+    assert_eq!(current.upstream, None);
+}
+
+#[test]
+fn checkout_remote_branch_handles_nested_names() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    let tip = t.commit("init");
+
+    let git_repo = git2::Repository::open(&t.repo.path).unwrap();
+    git_repo.remote("origin", "https://example.com/repo.git").unwrap();
+    git_repo.reference("refs/remotes/origin/feature/x", tip, true, "test: remote branch").unwrap();
+
+    t.repo.checkout_remote_branch("origin/feature/x").unwrap();
+    let current = t.repo.current_branch().unwrap().expect("a branch");
+    assert_eq!(current.name, "feature/x");
+    assert_eq!(current.head, tip);
+    assert_eq!(current.upstream.as_deref(), Some("origin/feature/x"));
+}

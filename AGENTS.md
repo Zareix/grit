@@ -132,5 +132,9 @@ just check       # fast cargo check
 
 - **No raw hex/rgb colors in app UI** — semantic tokens from `cx.theme()`
   only. New roles go into the app's token layer, not call sites.
+- **New icon (`IconName::…`)? Register it in `icon_assets!(ExtraIcons, …)`**
+  at the top of `crates/grit/src/main.rs` — the default asset source only
+  embeds the 101 legacy component icons, and a missing registration fails
+  silently at runtime (icon renders as nothing, no compile error).
 - UI text in English (app language), code comments in English.
 - All changes must pass `just ci` before commit.

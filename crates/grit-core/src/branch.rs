@@ -79,6 +79,44 @@ impl Repo {
         Ok(())
     }
 
+    /// Checkout a remote-tracking branch (`origin/main`) as a local branch
+    /// tracking it (`git checkout <short>` with auto-create). When a local
+    /// branch with the same short name already exists, it is checked out
+    /// directly, like `git checkout`.
+    pub fn checkout_remote_branch(&self, name: &str) -> Result<()> {
+        let repo = self.git2()?;
+        // Resolve the longest configured remote prefix: "origin/feature/x"
+        // splits into remote "origin" + branch "feature/x". Fall back to the
+        // first `/` when no configured remote matches (refs can exist for a
+        // remote that is no longer in the config).
+        let mut best: Option<(String, String)> = None;
+        for r in repo.remotes()?.iter().filter_map(|r| r.ok().flatten()) {
+            if let Some(s) = name.strip_prefix(&format!("{r}/"))
+                && best.as_ref().is_none_or(|(_, bs)| s.len() < bs.len())
+            {
+                best = Some((r.to_owned(), s.to_owned()));
+            }
+        }
+        let Some((remote, short)) =
+            best.or_else(|| name.split_once('/').map(|(r, s)| (r.to_owned(), s.to_owned())))
+        else {
+            return Err(
+                git2::Error::from_str(&format!("invalid remote branch name: {name}")).into()
+            );
+        };
+
+        // A local branch with this name already exists: just switch to it.
+        if repo.find_branch(&short, git2::BranchType::Local).is_ok() {
+            return self.checkout_branch(&short);
+        }
+
+        let (obj, _) = repo.revparse_ext(name)?;
+        let commit = obj.peel_to_commit()?;
+        let mut branch = repo.branch(&short, &commit, false)?;
+        branch.set_upstream(Some(&format!("{remote}/{short}")))?;
+        self.checkout_branch(&short)
+    }
+
     /// Switch the working tree to another branch (`git checkout <name>`).
     pub fn checkout_branch(&self, name: &str) -> Result<()> {
         let repo = self.git2()?;

@@ -477,6 +477,40 @@ impl Workspace {
         }
     }
 
+    /// Checkout a remote-tracking branch (`origin/main`) as a local tracking
+    /// branch (`main`).
+    pub(crate) fn checkout_remote_branch(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        match repo.checkout_remote_branch(name) {
+            Ok(()) => self.refresh(cx),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Delete the remote branch on its server (`git push <remote> --delete
+    /// <short>`); runs on the background thread like other remote ops.
+    pub(crate) fn delete_remote_branch(&mut self, name: &str, cx: &mut Context<Self>) {
+        let remotes = match self.repo.as_ref().map(grit_core::Repo::remotes) {
+            Some(Ok(remotes)) => remotes,
+            _ => Vec::new(),
+        };
+        let Some((remote, short)) = remotes
+            .iter()
+            .find_map(|r| name.strip_prefix(&format!("{r}/")).map(|s| (r.clone(), s.to_string())))
+        else {
+            self.error =
+                Some(format!("Cannot delete remote branch: unknown remote in {name}").into());
+            cx.notify();
+            return;
+        };
+
+        let args = vec!["push".to_string(), remote, "--delete".to_string(), short];
+        self.run_git_remote("delete", args, cx);
+    }
+
     pub(crate) fn toggle_create_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.creating_branch = !self.creating_branch;
         if !self.creating_branch {
