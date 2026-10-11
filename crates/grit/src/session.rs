@@ -5,7 +5,6 @@
 
 use std::path::{Path, PathBuf};
 
-use gk_core::Repo;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, TitleBar,
@@ -16,6 +15,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use grit_core::Repo;
 
 use crate::workspace::Workspace;
 
@@ -540,7 +540,7 @@ mod persist {
 
     fn file() -> Option<PathBuf> {
         let mut path = dirs::data_dir()?;
-        path.push("git-desktop");
+        path.push("grit");
         if !path.is_dir() {
             fs::create_dir_all(&path).ok()?;
         }

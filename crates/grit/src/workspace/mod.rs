@@ -7,12 +7,6 @@ mod components;
 
 use std::path::PathBuf;
 
-use gk_core::{
-    Repo,
-    branch::Branch,
-    commit::Commit,
-    status::{FileEntry, Status},
-};
 use gpui_kit::component::{
     ActiveTheme as _, ResizableState,
     diff::{DiffMode, DiffState},
@@ -21,6 +15,12 @@ use gpui_kit::component::{
     resizable_panel, v_resizable,
 };
 use gpui_kit::*;
+use grit_core::{
+    Repo,
+    branch::Branch,
+    commit::Commit,
+    status::{FileEntry, Status},
+};
 
 use self::components::{
     branches, commit_details, diff_view, history, staging, status_bar, toolbar,

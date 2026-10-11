@@ -1,4 +1,4 @@
-//! gk-core — Git plumbing for git-desktop.
+//! grit-core — Git plumbing for Grit.
 //!
 //! Pure Rust, no UI. Everything here is testable headlessly.
 

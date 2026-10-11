@@ -1,4 +1,4 @@
-//! Error type for gk-core.
+//! Error type for grit-core.
 
 use std::path::PathBuf;
 

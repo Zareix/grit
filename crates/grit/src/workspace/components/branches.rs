@@ -4,7 +4,6 @@
 //! revealed on hover, gives checkout / pull / set-upstream / delete; the same
 //! menu is available on right-click (context menu).
 
-use gk_core::branch::{Branch, BranchType};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Selectable as _, Sizable as _,
@@ -16,10 +15,11 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use grit_core::branch::{Branch, BranchType};
 
 use super::primitives::SectionLabel;
 use crate::workspace::Workspace;
-use gk_core::remote::RemoteOp;
+use grit_core::remote::RemoteOp;
 
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let muted = cx.theme().muted_foreground;

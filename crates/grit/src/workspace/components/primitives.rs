@@ -3,9 +3,9 @@
 //! Pure `RenderOnce` components: plain data in, one element out — no app
 //! state, no retained entities.
 
-use gk_core::status::ChangeKind;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::*;
+use grit_core::status::ChangeKind;
 
 /// Change-kind label + semantic color, shared by badge + text usages.
 pub fn kind_colors(

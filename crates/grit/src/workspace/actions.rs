@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use gk_core::{Oid, RemoteOp, Repo};
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -11,6 +10,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::*;
+use grit_core::{Oid, RemoteOp, Repo};
 
 use super::Workspace;
 
@@ -319,7 +319,7 @@ impl Workspace {
 
     /// Run a remote operation on a background thread (network + credentials),
     /// then refresh the UI.
-    pub(crate) fn run_remote(&mut self, op: gk_core::remote::RemoteOp, cx: &mut Context<Self>) {
+    pub(crate) fn run_remote(&mut self, op: grit_core::remote::RemoteOp, cx: &mut Context<Self>) {
         if self.remote_busy.is_some() {
             return;
         }
@@ -359,7 +359,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let remotes = match self.repo.as_ref().map(gk_core::Repo::remotes) {
+        let remotes = match self.repo.as_ref().map(grit_core::Repo::remotes) {
             Some(Ok(remotes)) if !remotes.is_empty() => remotes,
             _ => {
                 self.error = Some("Cannot set upstream: no remote configured".into());
@@ -580,7 +580,7 @@ impl Workspace {
     }
 
     /// Install a freshly produced patch in the diff viewer.
-    pub(crate) fn set_diff(&mut self, result: gk_core::Result<String>, cx: &mut Context<Self>) {
+    pub(crate) fn set_diff(&mut self, result: grit_core::Result<String>, cx: &mut Context<Self>) {
         match result {
             Ok(patch) => match DiffFile::parse(&patch) {
                 Ok(files) => self.diff.update(cx, |state, cx| state.set_files(files, cx)),

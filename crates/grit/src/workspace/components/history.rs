@@ -10,7 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::workspace::Workspace;
-use gk_core::Commit;
+use grit_core::Commit;
 
 /// The staging summary row shown above the current branch's commits.
 fn wip_row(ws: &Workspace, workspace: &WeakEntity<Workspace>, cx: &App) -> Stateful<Div> {

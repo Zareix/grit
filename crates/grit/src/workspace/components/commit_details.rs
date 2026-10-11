@@ -12,7 +12,7 @@ use gpui_kit::*;
 
 use super::primitives::PanelHeader;
 use crate::workspace::Workspace;
-use gk_core::status::FileEntry;
+use grit_core::status::FileEntry;
 
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let border = cx.theme().border;

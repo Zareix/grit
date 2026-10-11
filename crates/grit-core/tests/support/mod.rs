@@ -1,6 +1,6 @@
 //! Test helpers: build small throwaway repos to exercise the plumbing.
 
-use gk_core::Repo;
+use grit_core::Repo;
 
 /// A temp dir initialized as a git repo with one commit on `main`.
 pub struct TestRepo {

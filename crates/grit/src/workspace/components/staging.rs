@@ -2,7 +2,6 @@
 //! each with a header that never scrolls away, and two-line file rows in a
 //! virtualized list.
 
-use gk_core::status::FileEntry;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
@@ -11,6 +10,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use grit_core::status::FileEntry;
 
 use crate::workspace::Workspace;
 

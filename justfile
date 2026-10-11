@@ -1,4 +1,4 @@
-# git-desktop — justfile
+# Grit — justfile
 # Usage: just <recipe>   (or `just` to list)
 
 default:
@@ -12,7 +12,7 @@ build:
 
 # Build the desktop app and run it
 run:
-    cargo run -p gk-desktop
+    cargo run -p grit
 
 # Fast syntax/type check, no codegen
 check:
@@ -26,7 +26,7 @@ test:
 
 # Test only the core Git plumbing (fast, no UI)
 test-core:
-    cargo test -p gk-core
+    cargo test -p grit-core
 
 # --- lint & format -----------------------------------------------------
 

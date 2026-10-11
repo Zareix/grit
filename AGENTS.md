@@ -1,4 +1,4 @@
-# AGENTS.md — git-desktop
+# AGENTS.md — Grit
 
 Native Git client (GitKraken alternative) in Rust: GPUI Kit UI over a pure-Rust
 git plumbing core. Early stage; expect moving ground.
@@ -35,14 +35,14 @@ just check       # fast cargo check
 
 ## Layout
 
-- `crates/gk-core` — git plumbing, no UI, headless tests (`tempfile` repos in
+- `crates/grit-core` — git plumbing, no UI, headless tests (`tempfile` repos in
   `tests/support`). Modules: `repo` (open/discover), `status` (staging),
   `commit`, `branch`, `diff` (unified patches).
-- `crates/gk-desktop` — app. `src/workspace/mod.rs` owns all state + actions;
+- `crates/grit` — app. `src/workspace/mod.rs` owns all state + actions;
   `src/workspace/components/*` are render functions
   `render(&Workspace, &mut Context<Workspace>) -> Div`.
 - Git access: local ops via `git2` (libgit2); remote ops (fetch/pull/push)
-  shell out to the `git` binary (`gk-core::remote`) so SSH/keychain credentials
+  shell out to the `git` binary (`grit-core::remote`) so SSH/keychain credentials
   come from the user's git config — they run on the background executor.
 
 ## git2 0.21 gotchas (verified in source, not docs)

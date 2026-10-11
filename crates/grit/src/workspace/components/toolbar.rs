@@ -1,6 +1,5 @@
 //! Top toolbar: app title, remote commands (centered) + refresh.
 
-use gk_core::remote::RemoteOp;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
@@ -8,6 +7,7 @@ use gpui_kit::component::{
     h_flex,
 };
 use gpui_kit::*;
+use grit_core::remote::RemoteOp;
 
 use crate::workspace::Workspace;
 
@@ -23,10 +23,7 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         .border_color(border)
         .child(
             div().min_w_0().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(
-                ws.repo
-                    .as_ref()
-                    .and_then(|repo| repo.name())
-                    .unwrap_or_else(|| "git-desktop".to_string()),
+                ws.repo.as_ref().and_then(|repo| repo.name()).unwrap_or_else(|| "Grit".to_string()),
             ),
         )
         .child(div().flex_1())

@@ -2139,28 +2139,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gk-core"
-version = "0.2.0"
-dependencies = [
- "git2",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "gk-desktop"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "dirs 7.0.0",
- "gk-core",
- "gpui-kit",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "gl_generator"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2937,6 +2915,28 @@ checksum = "e20f99e46474f56bd905c56e817ebddcf377a611f94c53ac4649e4d3fa3c0cd0"
 dependencies = [
  "arraydeque",
  "smallvec",
+]
+
+[[package]]
+name = "grit"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "dirs 7.0.0",
+ "gpui-kit",
+ "grit-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "grit-core"
+version = "0.2.0"
+dependencies = [
+ "git2",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

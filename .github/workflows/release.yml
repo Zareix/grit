@@ -33,27 +33,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --locked -p gk-desktop
+        run: cargo build --release --locked -p grit
 
       - name: Bundle .app
         run: |
           SHORT="${VERSION#v}"
-          APP_DIR="git-desktop.app"
+          APP_DIR="grit.app"
           mkdir -p "$APP_DIR/Contents/MacOS"
-          cp target/release/git-desktop "$APP_DIR/Contents/MacOS/git-desktop"
+          cp target/release/grit "$APP_DIR/Contents/MacOS/grit"
           cat > "$APP_DIR/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
             <dict>
               <key>CFBundleName</key>
-              <string>git-desktop</string>
+              <string>Grit</string>
               <key>CFBundleDisplayName</key>
-              <string>git-desktop</string>
+              <string>Grit</string>
               <key>CFBundleIdentifier</key>
-              <string>com.zareix.git-desktop</string>
+              <string>com.zareix.grit</string>
               <key>CFBundleExecutable</key>
-              <string>git-desktop</string>
+              <string>grit</string>
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
@@ -80,24 +80,24 @@ jobs:
       - name: Sign .app (Developer ID + hardened runtime)
         run: |
           codesign --force --timestamp --options runtime \
-            --sign "$APPLE_IDENTITY" git-desktop.app
-          codesign --verify --deep --strict --verbose=2 git-desktop.app
+            --sign "$APPLE_IDENTITY" grit.app
+          codesign --verify --deep --strict --verbose=2 grit.app
 
       - name: Create dmg
         # dmg-root staging: app + /Applications symlink for the classic
         # drag-and-drop install, per the packaging guide.
         run: |
           mkdir -p dmg-root
-          cp -R git-desktop.app dmg-root/git-desktop.app
+          cp -R grit.app dmg-root/grit.app
           ln -s /Applications dmg-root/Applications
-          hdiutil create -volname git-desktop -srcfolder dmg-root \
-            -format UDZO "git-desktop-aarch64-macos.dmg"
+          hdiutil create -volname Grit -srcfolder dmg-root \
+            -format UDZO "grit-aarch64-macos.dmg"
 
       - name: Notarize dmg
         run: |
           P8="$RUNNER_TEMP/notary.p8"
           echo "$NOTARY_P8" | base64 --decode --output "$P8"
-          xcrun notarytool submit "git-desktop-aarch64-macos.dmg" \
+          xcrun notarytool submit "grit-aarch64-macos.dmg" \
             --key "$P8" \
             --key-id "$NOTARY_KEY_ID" \
             --issuer "$NOTARY_ISSUER_ID" \
@@ -105,15 +105,15 @@ jobs:
 
       - name: Staple dmg
         run: |
-          xcrun stapler staple git-desktop-aarch64-macos.dmg
+          xcrun stapler staple grit-aarch64-macos.dmg
           # Validation check before shipping per the packaging guide.
-          xcrun stapler validate git-desktop-aarch64-macos.dmg
+          xcrun stapler validate grit-aarch64-macos.dmg
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: git-desktop-macos
-          path: git-desktop-aarch64-macos.dmg
+          name: grit-macos
+          path: grit-aarch64-macos.dmg
           if-no-files-found: error
 
   build-windows:
@@ -128,17 +128,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --locked -p gk-desktop
+        run: cargo build --release --locked -p grit
 
       - name: Package exe
         shell: pwsh
-        run: Compress-Archive -Path target/release/git-desktop.exe -DestinationPath "git-desktop-x64-windows.zip"
+        run: Compress-Archive -Path target/release/grit.exe -DestinationPath "grit-x64-windows.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: git-desktop-windows
-          path: git-desktop-x64-windows.zip
+          name: grit-windows
+          path: grit-x64-windows.zip
           if-no-files-found: error
 
   build-linux:
@@ -164,20 +164,20 @@ jobs:
             libxkbcommon-x11-dev
 
       - name: Build release binary
-        run: cargo build --release --locked -p gk-desktop
+        run: cargo build --release --locked -p grit
 
       - name: Package tarball
         run: |
-          mkdir -p dist/portable/git-desktop/bin
-          cp target/release/git-desktop dist/portable/git-desktop/bin/git-desktop
-          tar -czf "git-desktop-x64-linux.tar.gz" -C dist/portable git-desktop
-          tar -tzf "git-desktop-x64-linux.tar.gz"
+          mkdir -p dist/portable/grit/bin
+          cp target/release/grit dist/portable/grit/bin/grit
+          tar -czf "grit-x64-linux.tar.gz" -C dist/portable grit
+          tar -tzf "grit-x64-linux.tar.gz"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: git-desktop-linux
-          path: git-desktop-x64-linux.tar.gz
+          name: grit-linux
+          path: grit-x64-linux.tar.gz
           if-no-files-found: error
 
   collect:
@@ -187,7 +187,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: git-desktop-*
+          pattern: grit-*
           merge-multiple: true
           path: release-assets
 

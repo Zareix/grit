@@ -1,17 +1,13 @@
 [package]
-name = "gk-desktop"
+name = "grit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = """Git client built in Rust with GPUI Kit"""
-
-[[bin]]
-name = "git-desktop"
-path = "src/main.rs"
+description = """Grit — native Git client built in Rust with GPUI Kit"""
 
 [dependencies]
-gk-core = { workspace = true }
+grit-core = { workspace = true }
 # Diff component highlighting: `tree-sitter-languages` enables every built-in
 # grammar (rust, python, go, js, ts, java, …) — a git client shows diffs from
 # arbitrary repos, so file extensions can be anything. Grammars are only

@@ -1,4 +1,4 @@
-//! Repository handle — the entry point of gk-core.
+//! Repository handle — the entry point of grit-core.
 
 use std::path::{Path, PathBuf};
 

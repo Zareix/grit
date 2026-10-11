@@ -1,6 +1,6 @@
 mod support;
 
-use gk_core::status::ChangeKind;
+use grit_core::status::ChangeKind;
 use support::TestRepo;
 
 #[test]

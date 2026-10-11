@@ -1,4 +1,4 @@
-//! git-desktop — a Git client built in Rust with GPUI Kit.
+//! Grit — a native Git client built in Rust with GPUI Kit.
 
 mod session;
 mod workspace;
@@ -39,7 +39,7 @@ impl AssetSource for AppAssets {
     }
 }
 
-actions!(gk_desktop, [Quit]);
+actions!(grit, [Quit]);
 
 fn main() {
     // Optional repo path from the CLI; without one the session shows the
@@ -55,7 +55,7 @@ fn main() {
         // nothing. The key equivalent comes from the `cmd-q` binding.
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus([Menu::new("git-desktop").items([
+        cx.set_menus([Menu::new("Grit").items([
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
             MenuItem::action("Quit", Quit),

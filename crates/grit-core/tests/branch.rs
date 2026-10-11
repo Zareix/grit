@@ -1,6 +1,6 @@
 mod support;
 
-use gk_core::branch::BranchType;
+use grit_core::branch::BranchType;
 use support::TestRepo;
 
 #[test]
