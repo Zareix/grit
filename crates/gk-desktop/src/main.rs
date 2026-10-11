@@ -39,6 +39,8 @@ impl AssetSource for AppAssets {
     }
 }
 
+actions!(gk_desktop, [Quit]);
+
 fn main() {
     // Optional repo path from the CLI; without one the session shows the
     // tab picker page (or restores the persisted tabs).
@@ -47,6 +49,17 @@ fn main() {
     application().with_assets(AppAssets).run(move |cx| {
         // Required before using any gpui-kit component.
         init(cx);
+
+        // App menu. gpui builds no menu bar by default and on macOS ⌘Q is
+        // carried by the menu bar's Quit item, so without this it does
+        // nothing. The key equivalent comes from the `cmd-q` binding.
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.set_menus([Menu::new("git-desktop").items([
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Quit", Quit),
+        ])]);
 
         // TitleBar::window_options() gives the app a custom title bar drawn
         // by the TitleBar element itself (tabs align with the native window
