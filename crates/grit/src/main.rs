@@ -5,6 +5,7 @@ mod workspace;
 
 use gpui_kit::assets::{Assets as ComponentAssets, icon_assets};
 use gpui_kit::component::TitleBar;
+use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
 use std::borrow::Cow;
 
@@ -60,6 +61,11 @@ fn main() {
         // Required before using any gpui-kit component.
         init(cx);
 
+        // Follow the system appearance from startup (sync_system_appearance
+        // with no window reads `cx.window_appearance()`); each window then
+        // observes appearance changes below.
+        Theme::sync_system_appearance(None, cx);
+
         // App menu. gpui builds no menu bar by default and on macOS ⌘Q is
         // carried by the menu bar's Quit item, so without this it does
         // nothing. The key equivalent comes from the `cmd-q` binding.
@@ -88,6 +94,13 @@ fn main() {
             WindowBounds::Windowed(Bounds { origin, size })
         });
         open_window(options, cx, move |window, cx| {
+            // While this window is open, re-sync the theme whenever the
+            // system light/dark appearance changes.
+            window
+                .observe_window_appearance(|window, cx| {
+                    Theme::sync_system_appearance(Some(window), cx);
+                })
+                .detach();
             cx.new(|cx| Session::new(repo_path.clone(), window, cx))
         })
         .expect("failed to open window");

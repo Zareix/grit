@@ -42,7 +42,7 @@ fn wip_row(ws: &Workspace, workspace: &WeakEntity<Workspace>, cx: &App) -> State
         .border_b_1()
         .border_color(border.opacity(0.5))
         .text_size(px(12.))
-        .when(ws.selected_commit.is_none(), |this| this.bg(cx.theme().accent.opacity(0.3)))
+        .when(ws.selected_commit.is_none(), |this| this.bg(cx.theme().accent))
         .when(ws.selected_commit.is_some(), |this| {
             this.cursor_pointer().hover(|style| style.bg(border.opacity(0.4)))
         })
@@ -151,7 +151,7 @@ fn commit_row(
         .border_b_1()
         .border_color(border.opacity(0.5))
         .text_size(px(12.))
-        .when(is_selected, |this| this.bg(cx.theme().accent.opacity(0.3)))
+        .when(is_selected, |this| this.bg(cx.theme().accent))
         .when(!is_selected, |this| {
             this.cursor_pointer().hover(|style| style.bg(border.opacity(0.4)))
         })
