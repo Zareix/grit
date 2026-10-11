@@ -1,34 +1,16 @@
-//! Diff panel: unified patch of the selected file, colored per line.
+//! Diff panel: the selected file's patch, rendered by the gpui-kit `Diff`
+//! component (virtualized rows, line numbers, tree-sitter syntax colors,
+//! unified or side-by-side layout).
 
+use crate::workspace::Workspace;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
+    diff::{Diff, DiffHunkSeparator, DiffMode},
     h_flex, v_flex,
 };
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-
-use crate::workspace::Workspace;
-
-/// One rendered patch line.
-pub(crate) struct PatchLine {
-    pub(crate) text: String,
-    pub(crate) kind: LineKind,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum LineKind {
-    /// Added content.
-    Added,
-    /// Removed content.
-    Removed,
-    /// Hunk header (@@ ... @@).
-    Hunk,
-    /// diff/index/---/+++ metadata.
-    Meta,
-    Context,
-}
 
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let border = cx.theme().border;
@@ -41,10 +23,11 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let full = path.to_string_lossy().to_string();
     let name =
         path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| full.clone());
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(|p| p.to_string_lossy().into_owned());
+    // The Diff component shows a per-file summary below the header when a
+    // file has no rows (binary change, pure rename…), so the viewer renders
+    // whenever files are installed; "No changes" only for a truly empty diff.
+    let has_files = !ws.diff.read(cx).files().is_empty();
+
     let source = if ws.diff_from_commit {
         match &ws.selected_commit {
             Some(commit) => {
@@ -59,12 +42,10 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         "unstaged".to_string()
     };
 
-    let lines = &ws.diff_rows;
-
     v_flex()
         .size_full()
         .min_h_0()
-        // header: file name + source chip on top, parent path below, close right
+        // header: file name + source chip on top, close right
         .child(
             h_flex()
                 .px_3()
@@ -82,120 +63,74 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                         .gap_1()
                         .child(Icon::new(IconName::FileCode).size_3().text_color(muted))
                         .child(
-                            v_flex()
-                                .min_w_0()
-                                .gap_0p5()
-                                .child(
-                                    h_flex()
-                                        .min_w_0()
-                                        .items_center()
-                                        .gap_1p5()
-                                        .child(
-                                            div()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_size(px(13.))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(cx.theme().foreground)
-                                                .child(name),
-                                        )
-                                        .child(
-                                            div()
-                                                .px_1()
-                                                .rounded_sm()
-                                                .text_size(px(10.))
-                                                .text_color(muted)
-                                                .bg(border.opacity(0.5))
-                                                .child(source),
-                                        ),
-                                )
-                                // line 2: parent directory
-                                .when_some(parent, |this, parent| {
-                                    this.child(
+                            v_flex().min_w_0().gap_0p5().child(
+                                h_flex()
+                                    .min_w_0()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .child(
                                         div()
                                             .min_w_0()
                                             .truncate()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(cx.theme().foreground)
+                                            .child(name),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_1()
+                                            .rounded_sm()
                                             .text_size(px(10.))
                                             .text_color(muted)
-                                            .child(format!("{} ", parent)),
-                                    )
-                                }),
+                                            .bg(border.opacity(0.5))
+                                            .child(source),
+                                    ),
+                            ),
                         ),
                 )
                 .child(
-                    Button::new("close-diff")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Close)
-                        .on_click(cx.listener(|this, _, _, cx| this.clear_selection(cx))),
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new("toggle-diff-mode")
+                                .ghost()
+                                .xsmall()
+                                .label(if ws.split_mode(cx) { "Unified" } else { "Split" })
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_diff_mode(cx))),
+                        )
+                        .child(
+                            Button::new("close-diff")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .on_click(cx.listener(|this, _, _, cx| this.clear_selection(cx))),
+                        ),
                 ),
         )
-        // body
-        .child(
+        // body: the Diff component owns its scrolling; do not nest another
+        // scrollable region (unified rows, or two columns in split).
+        .child(div().flex_1().min_h_0().child(if has_files {
+            Diff::new(&ws.diff)
+                .hunk_separator(DiffHunkSeparator::LineInfo)
+                .soft_wrap(true)
+                .h_full()
+                .into_any_element()
+        } else {
             div()
-                .id("diff-body")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .font_family(cx.theme().mono_font_family.clone())
-                .children(if lines.is_empty() {
-                    vec![
-                        div()
-                            .flex()
-                            .justify_center()
-                            .py_4()
-                            .text_sm()
-                            .text_color(muted)
-                            .child("No changes"),
-                    ]
-                } else {
-                    lines.iter().map(|line| patch_line_row(line, cx)).collect()
-                }),
-        )
+                .flex()
+                .justify_center()
+                .py_4()
+                .text_sm()
+                .text_color(muted)
+                .child("No changes")
+                .into_any_element()
+        }))
 }
 
-fn patch_line_row(line: &PatchLine, cx: &mut Context<Workspace>) -> Div {
-    let theme = cx.theme();
-    let (bg, fg) = match line.kind {
-        LineKind::Added => (Some(theme.success.opacity(0.12)), theme.success),
-        LineKind::Removed => (Some(theme.danger.opacity(0.12)), theme.danger),
-        LineKind::Hunk => (None, theme.info),
-        LineKind::Meta => (None, theme.muted_foreground),
-        LineKind::Context => (None, theme.foreground),
-    };
-
-    let mut row = div()
-        .w_full()
-        .px_3()
-        .text_size(px(11.))
-        .whitespace_nowrap()
-        .line_height(relative(1.4))
-        .text_color(fg)
-        .child(line.text.clone());
-    if let Some(bg) = bg {
-        row = row.bg(bg);
+impl Workspace {
+    /// Whether the diff viewer currently shows the side-by-side layout.
+    pub(crate) fn split_mode(&self, cx: &App) -> bool {
+        self.diff.read(cx).mode() == DiffMode::Split
     }
-    row
-}
-
-/// Parse our unified patch text into colored lines.
-pub(crate) fn parse_patch(patch: &str) -> Vec<PatchLine> {
-    patch
-        .lines()
-        .map(|raw| {
-            let kind = if raw.starts_with("---") || raw.starts_with("+++") {
-                LineKind::Meta
-            } else {
-                match raw.chars().next() {
-                    Some('+') => LineKind::Added,
-                    Some('-') => LineKind::Removed,
-                    Some('@') => LineKind::Hunk,
-                    Some('d') if raw.starts_with("diff ") => LineKind::Meta,
-                    Some('i') if raw.starts_with("index ") => LineKind::Meta,
-                    _ => LineKind::Context,
-                }
-            };
-            PatchLine { text: raw.to_string(), kind }
-        })
-        .collect()
 }

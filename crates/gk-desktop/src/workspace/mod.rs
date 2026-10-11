@@ -14,13 +14,14 @@ use gk_core::{
     status::{FileEntry, Status},
 };
 use gpui_kit::component::{
-    ActiveTheme as _, ResizableState, h_resizable,
+    ActiveTheme as _, ResizableState,
+    diff::{DiffMode, DiffState},
+    h_resizable,
     input::{InputEvent, InputState},
     resizable_panel, v_resizable,
 };
 use gpui_kit::*;
 
-use self::components::diff_view::PatchLine;
 use self::components::{
     branches, commit_details, diff_view, history, staging, status_bar, toolbar,
 };
@@ -37,8 +38,9 @@ pub struct Workspace {
     selected_path: Option<PathBuf>,
     /// Whether the selected file's diff is the staged one (HEAD -> index).
     selected_staged: bool,
-    /// Pre-parsed patch lines of the selected file.
-    diff_rows: Vec<PatchLine>,
+    /// Diff viewer state: one `DiffFile` for the selected file, kept across
+    /// selections so expansion / scroll position behave sanely.
+    diff: Entity<DiffState>,
     log: Vec<Commit>,
     branches: Vec<Branch>,
     current_branch: Option<Branch>,
@@ -61,6 +63,9 @@ pub struct Workspace {
     /// Whether `selected_path`'s diff comes from the selected commit (rather
     /// than the worktree).
     diff_from_commit: bool,
+    /// Whether the diff panel is currently open; used to detect the
+    /// open transition (frame-sized panel layout resets).
+    diff_open: bool,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
@@ -82,6 +87,7 @@ impl Workspace {
 
         let layout = cx.new(|_| ResizableState::default());
         let center_layout = cx.new(|_| ResizableState::default());
+        let diff = cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Unified));
 
         let mut this = Self {
             repo: None,
@@ -91,7 +97,7 @@ impl Workspace {
             creating_branch: false,
             selected_path: None,
             selected_staged: false,
-            diff_rows: Vec::new(),
+            diff,
             log: Vec::new(),
             branches: Vec::new(),
             current_branch: None,
@@ -104,6 +110,7 @@ impl Workspace {
             selected_commit: None,
             commit_files: Vec::new(),
             diff_from_commit: false,
+            diff_open: false,
             error: None,
             _subscriptions: vec![enter_subscription],
         };
@@ -146,7 +153,8 @@ impl Render for Workspace {
                                 .child(resizable_panel().child(history::render(self, cx)))
                                 .child(
                                     resizable_panel()
-                                        .size(px(240.))
+                                        .size(px(400.))
+                                        .flex_none()
                                         .size_range(px(120.)..gpui::Pixels::MAX)
                                         .visible(self.selected_path.is_some())
                                         .child(diff_view::render(self, cx)),

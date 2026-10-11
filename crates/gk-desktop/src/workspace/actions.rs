@@ -7,6 +7,7 @@ use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogFooter,
+    diff::{DiffFile, DiffMode},
     v_flex,
 };
 use gpui_kit::*;
@@ -50,7 +51,7 @@ impl Workspace {
                 self.log = log;
                 self.error = None;
                 self.sync_viewed_branch(&repo);
-                self.sync_selection(&repo);
+                self.sync_selection(&repo, cx);
             }
             _ => {
                 self.error = Some("Failed to read repository state".into());
@@ -98,7 +99,7 @@ impl Workspace {
 
     /// Re-read the selected file's diff after the status changed; drop the
     /// selection when the file disappeared from both sections.
-    pub(crate) fn sync_selection(&mut self, repo: &Repo) {
+    pub(crate) fn sync_selection(&mut self, repo: &Repo, cx: &mut Context<Self>) {
         let Some(sel) = self.selected_path.clone() else {
             return;
         };
@@ -109,14 +110,15 @@ impl Workspace {
                 self.diff_from_commit = true;
                 self.selected_staged = false;
                 let result = repo.commit_file_diff(commit.id, &sel);
-                self.set_diff(result);
+                self.set_diff(result, cx);
                 return;
             }
             // File no longer part of the commit view: clear it.
             self.selected_path = None;
             self.selected_staged = false;
             self.diff_from_commit = false;
-            self.diff_rows.clear();
+            self.hide_diff_panel();
+            self.clear_diff(cx);
             return;
         }
 
@@ -128,23 +130,25 @@ impl Workspace {
             self.selected_staged = staged;
             self.diff_from_commit = false;
             let result = if staged { repo.diff_staged(&sel) } else { repo.diff_unstaged(&sel) };
-            self.set_diff(result);
+            self.set_diff(result, cx);
         } else {
             self.selected_path = None;
             self.selected_staged = false;
             self.diff_from_commit = false;
-            self.diff_rows.clear();
+            self.hide_diff_panel();
+            self.clear_diff(cx);
         }
     }
 
     /// Click on a file row: select it and show its diff.
     pub(crate) fn select_file(&mut self, path: PathBuf, staged: bool, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.clone() else { return };
+        self.show_diff_panel(cx);
         self.selected_path = Some(path.clone());
         self.selected_staged = staged;
         self.diff_from_commit = false;
         let result = if staged { repo.diff_staged(&path) } else { repo.diff_unstaged(&path) };
-        self.set_diff(result);
+        self.set_diff(result, cx);
         cx.notify();
     }
 
@@ -153,11 +157,12 @@ impl Workspace {
     pub(crate) fn select_commit_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let Some(commit) = self.selected_commit.clone() else { return };
         let Some(repo) = self.repo.clone() else { return };
+        self.show_diff_panel(cx);
         self.selected_path = Some(path.clone());
         self.selected_staged = false;
         self.diff_from_commit = true;
         let result = repo.commit_file_diff(commit.id, &path);
-        self.set_diff(result);
+        self.set_diff(result, cx);
         cx.notify();
     }
 
@@ -165,7 +170,8 @@ impl Workspace {
         self.selected_path = None;
         self.selected_staged = false;
         self.diff_from_commit = false;
-        self.diff_rows.clear();
+        self.hide_diff_panel();
+        self.clear_diff(cx);
         cx.notify();
     }
 
@@ -188,7 +194,8 @@ impl Workspace {
                 self.selected_path = None;
                 self.selected_staged = false;
                 self.diff_from_commit = false;
-                self.diff_rows.clear();
+                self.hide_diff_panel();
+                self.clear_diff(cx);
             }
             Err(e) => {
                 self.error = Some(e.to_string().into());
@@ -204,7 +211,8 @@ impl Workspace {
             self.selected_path = None;
             self.selected_staged = false;
             self.diff_from_commit = false;
-            self.diff_rows.clear();
+            self.hide_diff_panel();
+            self.clear_diff(cx);
             cx.notify();
         }
     }
@@ -553,14 +561,50 @@ fn try_open(commands: &[(String, Vec<String>)]) -> Result<(), String> {
 }
 
 impl Workspace {
-    /// Store a freshly produced patch as pre-parsed render rows.
-    pub(crate) fn set_diff(&mut self, result: gk_core::Result<String>) {
-        self.diff_rows = match result {
-            Ok(patch) => super::components::diff_view::parse_patch(&patch),
+    fn show_diff_panel(&mut self, cx: &mut Context<Self>) {
+        // First open of the panel in this session: while the panel was
+        // hidden, the layout state adopted the history panel at the whole
+        // container height. Restart its panel record so the opening frame
+        // adopts [history, diff] consistently instead of rescaling the
+        // stale record (which would shrink the fresh default size).
+        if !self.diff_open {
+            self.diff_open = true;
+            self.center_layout.update(cx, |state, _| state.clear());
+        }
+    }
+
+    fn hide_diff_panel(&mut self) {
+        if self.diff_open {
+            self.diff_open = false;
+        }
+    }
+
+    /// Install a freshly produced patch in the diff viewer.
+    pub(crate) fn set_diff(&mut self, result: gk_core::Result<String>, cx: &mut Context<Self>) {
+        match result {
+            Ok(patch) => match DiffFile::parse(&patch) {
+                Ok(files) => self.diff.update(cx, |state, cx| state.set_files(files, cx)),
+                Err(e) => self.error = Some(e.to_string().into()),
+            },
             Err(e) => {
                 self.error = Some(e.to_string().into());
-                Vec::new()
+                self.clear_diff(cx);
             }
         };
+        cx.notify();
+    }
+
+    /// Show the empty diff viewer (no file selected).
+    pub(crate) fn clear_diff(&mut self, cx: &mut Context<Self>) {
+        self.diff.update(cx, |state, cx| state.set_files([], cx));
+    }
+
+    /// Toggle the diff viewer between unified and side-by-side layout.
+    pub(crate) fn toggle_diff_mode(&mut self, cx: &mut Context<Self>) {
+        self.diff.update(cx, |state, cx| {
+            let next =
+                if state.mode() == DiffMode::Split { DiffMode::Unified } else { DiffMode::Split };
+            state.set_mode(next, cx);
+        });
     }
 }

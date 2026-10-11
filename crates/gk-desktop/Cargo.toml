@@ -12,7 +12,12 @@ path = "src/main.rs"
 
 [dependencies]
 gk-core = { workspace = true }
-gpui-kit = { workspace = true }
+# Diff component highlighting: `tree-sitter-languages` enables every built-in
+# grammar (rust, python, go, js, ts, java, …) — a git client shows diffs from
+# arbitrary repos, so file extensions can be anything. Grammars are only
+# queried on demand at runtime; the cost is one-time compile time + some
+# binary size. (No standalone `tree-sitter-json`: json is inside `tree-sitter`.)
+gpui-kit = { workspace = true, features = ["tree-sitter", "tree-sitter-languages"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = { workspace = true }
