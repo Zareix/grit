@@ -1,18 +1,27 @@
 <svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="400" height="400" fill="url(#paint0_linear_101_92)"/>
-<path d="M316.78 216.851C313.046 242.511 300.893 266.203 282.231 284.205C263.569 302.208 239.456 313.501 213.678 316.311" stroke="#4DE6C1" stroke-width="14"/>
-<path d="M181.643 315.388C157.125 311.274 134.554 299.458 117.204 281.653C99.854 263.848 88.6265 240.979 85.1498 216.362" stroke="#4DE6C1" stroke-width="14"/>
-<path d="M85.2198 183.149C88.8652 158.102 100.535 134.913 118.477 117.06C136.42 99.2081 159.668 87.6556 184.733 84.1364" stroke="#4DE6C1" stroke-width="14"/>
-<circle cx="201" cy="83" r="15" stroke="#4DE6C1" stroke-width="12"/>
-<circle cx="85" cy="200" r="15" stroke="#4DE6C1" stroke-width="12"/>
-<path d="M200.5 302C208.373 302 215 308.579 215 317C215 325.421 208.373 332 200.5 332C192.627 332 186 325.421 186 317C186 308.579 192.627 302 200.5 302Z" stroke="#4DE6C1" stroke-width="12"/>
-<path d="M200.5 184C208.373 184 215 190.579 215 199C215 207.421 208.373 214 200.5 214C192.627 214 186 207.421 186 199C186 190.579 192.627 184 200.5 184Z" stroke="#4DE6C1" stroke-width="12"/>
-<path d="M313.5 185C321.373 185 328 191.579 328 200C328 208.421 321.373 215 313.5 215C305.627 215 299 208.421 299 200C299 191.579 305.627 185 313.5 185Z" stroke="#4DE6C1" stroke-width="12"/>
-<path d="M217.469 200L302.582 199.74" stroke="#4DE6C1" stroke-width="12"/>
+<rect width="400" height="400" fill="url(#paint0_linear_102_2)"/>
+<mask id="mask0_102_2" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="64" y="62" width="270" height="276">
+<path d="M316.78 216.851C313.046 242.511 300.893 266.203 282.231 284.205C263.569 302.208 239.456 313.501 213.678 316.311" stroke="#F6F6F6" stroke-width="14"/>
+<path d="M181.643 315.388C157.125 311.274 134.554 299.458 117.204 281.653C99.854 263.848 88.6265 240.979 85.1498 216.362" stroke="#F6F6F6" stroke-width="14"/>
+<path d="M85.2198 183.149C88.8652 158.102 100.535 134.913 118.477 117.06C136.42 99.2081 159.668 87.6556 184.733 84.1364" stroke="#F6F6F6" stroke-width="14"/>
+<circle cx="201" cy="83" r="15" stroke="#F6F6F6" stroke-width="12"/>
+<circle cx="85" cy="200" r="15" stroke="#F6F6F6" stroke-width="12"/>
+<path d="M200.5 302C208.373 302 215 308.579 215 317C215 325.421 208.373 332 200.5 332C192.627 332 186 325.421 186 317C186 308.579 192.627 302 200.5 302Z" stroke="#F6F6F6" stroke-width="12"/>
+<path d="M200.5 184C208.373 184 215 190.579 215 199C215 207.421 208.373 214 200.5 214C192.627 214 186 207.421 186 199C186 190.579 192.627 184 200.5 184Z" stroke="#F6F6F6" stroke-width="12"/>
+<path d="M313.5 185C321.373 185 328 191.579 328 200C328 208.421 321.373 215 313.5 215C305.627 215 299 208.421 299 200C299 191.579 305.627 185 313.5 185Z" stroke="#F6F6F6" stroke-width="12"/>
+<path d="M217.469 200L302.582 199.74" stroke="#F6F6F6" stroke-width="12"/>
+</mask>
+<g mask="url(#mask0_102_2)">
+<rect x="65" y="62" width="288" height="288" fill="url(#paint1_linear_102_2)"/>
+</g>
 <defs>
-<linearGradient id="paint0_linear_101_92" x1="200" y1="0" x2="200" y2="400" gradientUnits="userSpaceOnUse">
+<linearGradient id="paint0_linear_102_2" x1="200" y1="0" x2="200" y2="400" gradientUnits="userSpaceOnUse">
 <stop stop-color="#152949"/>
-<stop offset="1" stop-color="#24356C"/>
+<stop offset="1" stop-color="#364A8D"/>
+</linearGradient>
+<linearGradient id="paint1_linear_102_2" x1="209" y1="62" x2="209" y2="350" gradientUnits="userSpaceOnUse">
+<stop stop-color="#F9F9F9"/>
+<stop offset="1" stop-color="#F9F9F9" stop-opacity="0.59"/>
 </linearGradient>
 </defs>
 </svg>
