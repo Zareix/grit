@@ -39,8 +39,9 @@ jobs:
         run: |
           SHORT="${VERSION#v}"
           APP_DIR="grit.app"
-          mkdir -p "$APP_DIR/Contents/MacOS"
+          mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
           cp target/release/grit "$APP_DIR/Contents/MacOS/grit"
+          cp packaging/grit.icns "$APP_DIR/Contents/Resources/grit.icns"
           cat > "$APP_DIR/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -52,6 +53,8 @@ jobs:
               <string>Grit</string>
               <key>CFBundleIdentifier</key>
               <string>com.zareix.grit</string>
+              <key>CFBundleIconFile</key>
+              <string>grit</string>
               <key>CFBundleExecutable</key>
               <string>grit</string>
               <key>CFBundlePackageType</key>
@@ -168,8 +171,11 @@ jobs:
 
       - name: Package tarball
         run: |
-          mkdir -p dist/portable/grit/bin
+          mkdir -p dist/portable/grit/bin \
+            dist/portable/grit/share/icons/hicolor/256x256/apps
           cp target/release/grit dist/portable/grit/bin/grit
+          cp packaging/grit.png \
+            dist/portable/grit/share/icons/hicolor/256x256/apps/grit.png
           tar -czf "grit-x64-linux.tar.gz" -C dist/portable grit
           tar -tzf "grit-x64-linux.tar.gz"
 
