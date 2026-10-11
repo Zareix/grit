@@ -45,6 +45,14 @@ just check       # fast cargo check
   shell out to the `git` binary (`grit-core::remote`) so SSH/keychain credentials
   come from the user's git config — they run on the background executor.
 
+## GPUI Kit resources — doc FIRST
+
+- **Check the GPUI Kit doc before anything else**: <https://gpui-kit.com/llms.txt> is
+  the index of the full docs (paint, element lifecycle, components, …).
+- Only when the doc is silent or seems to describe another version, dig into the
+  installed crate source (`~/.cargo/registry/src/.../gpui-component-*`,
+  `~/.cargo/git/checkouts/gpui-kit-*/…`) and verify signatures — never invent APIs.
+
 ## git2 0.21 gotchas (verified in source, not docs)
 
 - `reset_default` with pathspec `["."]` matches **nothing** — full unstage is
