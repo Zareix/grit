@@ -42,8 +42,9 @@ pub(super) fn ref_chips(
         let muted = cx.theme().muted_foreground;
         cell = cell.child(
             HoverCard::new(SharedString::from(format!("refs-more-{oid}")))
-                // Below the trigger, left-aligned with it.
-                .anchor(Anchor::TopLeft)
+                // Above the trigger: the log rows below must stay readable
+                // (the card otherwise covers the refs cell / next row).
+                .anchor(Anchor::BottomLeft)
                 .open_delay(Duration::from_millis(300))
                 .close_delay(Duration::from_millis(150))
                 .flex_none()
