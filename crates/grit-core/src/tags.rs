@@ -45,4 +45,12 @@ impl Repo {
         repo.reference(&format!("refs/tags/{name}"), oid, false, "grit: create tag")?;
         Ok(())
     }
+
+    /// Delete the named tag locally (`git tag -d`). The commit it points
+    /// at stays; only the ref leaves the tag listing.
+    pub fn delete_tag(&self, name: &str) -> Result<()> {
+        let repo = self.git2()?;
+        repo.tag_delete(name)?;
+        Ok(())
+    }
 }

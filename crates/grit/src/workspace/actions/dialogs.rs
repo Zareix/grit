@@ -134,6 +134,31 @@ impl Workspace {
         });
     }
 
+    /// Tag-delete confirm dialog: remote copy first, local ref second.
+    /// The commit itself is untouched, only the ref leaves.
+    pub(crate) fn open_tag_delete_dialog(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = name.to_owned();
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Delete tag?",
+                question: format!("Delete tag \"{name}\"?"),
+                detail: "The remote copy is removed first (when a remote is configured), \
+                         then the local ref: a fetch cannot recreate the tag. The commit \
+                         itself stays; history does not change."
+                    .into(),
+                confirm_label: "Delete",
+            },
+            move |ws, cx| ws.delete_tag_everywhere(&name, cx),
+            window,
+            cx,
+        );
+    }
+
     /// Update-available confirm dialog: release notes + download, or the
     /// restart confirmation once the update is already installed.
     pub(crate) fn open_update_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {

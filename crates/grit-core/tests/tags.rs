@@ -47,3 +47,17 @@ fn create_tag_at_commit() {
     t.repo.create_tag("v1.0", second).unwrap();
     assert_eq!(t.repo.tags().unwrap().len(), 2);
 }
+
+#[test]
+fn delete_tag_removes_the_local_ref() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    let first = t.commit("first");
+
+    t.repo.create_tag("v0.9", first).unwrap();
+    t.repo.delete_tag("v0.9").unwrap();
+    assert!(t.repo.tags().unwrap().is_empty());
+
+    // Deleting again is refused, like `git tag -d` on a missing tag.
+    assert!(t.repo.delete_tag("v0.9").is_err());
+}

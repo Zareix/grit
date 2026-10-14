@@ -8,7 +8,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, h_flex,
     hover_card::HoverCard,
-    menu::{ContextMenuExt as _, PopupMenu},
+    menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -110,8 +110,8 @@ fn ref_chip(
         .into_any_element()
 }
 
-/// The branches sidebar's menus on the log's ref chips. Only branches act —
-/// tags have no actions yet, and an empty menu never opens.
+/// The branches sidebar's menus on the log's ref chips. Tags act from
+/// here too (push / delete), branches delegate to the sidebar menus.
 fn ref_menu(
     menu: PopupMenu,
     r: &CommitRef,
@@ -135,6 +135,30 @@ fn ref_menu(
             }
         }
         CommitRefKind::Remote => remote_branch_menu(menu, &r.name, workspace, cx),
-        CommitRefKind::Tag => menu,
+        CommitRefKind::Tag => tag_menu(menu, &r.name, workspace, cx),
     }
+}
+
+/// Right-click actions on a tag chip: publish it, or delete it (remote
+/// copy first, then the local ref, behind a confirm dialog).
+fn tag_menu(
+    mut menu: PopupMenu,
+    name: &str,
+    workspace: &WeakEntity<Workspace>,
+    _cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let name: String = name.to_owned();
+    menu = menu.item(PopupMenuItem::new("Push tag").icon(IconName::Upload).on_click({
+        let workspace = workspace.clone();
+        let name = name.clone();
+        move |_, _, cx| {
+            workspace.update(cx, |ws, cx| ws.push_tag(&name, cx)).ok();
+        }
+    }));
+    menu.item(PopupMenuItem::new("Delete tag…").icon(IconName::Trash).on_click({
+        let workspace = workspace.clone();
+        move |_, window, cx| {
+            workspace.update(cx, |ws, cx| ws.open_tag_delete_dialog(&name, window, cx)).ok();
+        }
+    }))
 }

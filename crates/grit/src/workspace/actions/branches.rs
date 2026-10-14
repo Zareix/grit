@@ -107,6 +107,55 @@ impl Workspace {
         }
     }
 
+    /// Push a tag to the first configured remote (`git push <remote>
+    /// <tag>`; origin wins when several are configured). The release is
+    /// published through the same credential story as branch pushes.
+    pub(crate) fn push_tag(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.as_ref() else { return };
+        let remote = match repo.remotes() {
+            Ok(remotes) => remotes.first().cloned(),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+                return;
+            }
+        };
+        let Some(remote) = remote else {
+            self.error = Some("No remote configured to push the tag".into());
+            cx.notify();
+            return;
+        };
+        let args = vec!["push".to_string(), remote, name.to_string()];
+        self.run_git_remote("push tag", args, cx);
+    }
+
+    /// Delete-tag dialog action: the remote copy goes first (`git push
+    /// <remote> :refs/tags/<name>`) when a remote is configured, then the
+    /// local ref leaves (`git tag -d`) — so a later fetch cannot
+    /// resurrect the tag. Without a remote only the local ref goes.
+    pub(crate) fn delete_tag_everywhere(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.as_ref() else { return };
+        let mut steps = Vec::new();
+        match repo.remotes() {
+            Ok(remotes) => {
+                if let Some(remote) = remotes.first() {
+                    steps.push(vec![
+                        "push".to_string(),
+                        remote.clone(),
+                        format!(":refs/tags/{name}"),
+                    ]);
+                }
+            }
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+                return;
+            }
+        }
+        steps.push(vec!["tag".to_string(), "-d".to_string(), name.to_string()]);
+        self.run_git_steps("delete tag", steps, cx);
+    }
+
     /// "Create branch here" on a commit: small input dialog naming the
     /// branch to attach at `oid`.
     pub(crate) fn open_create_branch_dialog(
