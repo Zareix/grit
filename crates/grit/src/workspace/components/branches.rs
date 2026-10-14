@@ -470,8 +470,11 @@ pub(crate) fn branch_menu(
 ///   of the current branch onto the tip is offered next to the merge —
 ///   both reach the same history state, merge just goes through the
 ///   merger machinery.
-/// - diverged: additionally rebase the clicked branch onto the current tip
-///   (confirm dialog — history rewrite).
+/// - diverged (`ahead > 0 && behind > 0`): Rebase the **current branch**
+///   onto the clicked tip (`git rebase <base> <branch>` — the checked-out
+///   branch replays its unique commits on the clicked tip and stays
+///   checked out). Counts are phrased from the rebased branch's
+///   perspective (its `ahead` = the subject's `behind`).
 ///
 /// For a clicked *remote* tip the ref itself cannot move, so the current
 /// branch is the one that acts (fast-forward jump/merge/rebase against the
@@ -543,16 +546,20 @@ fn integration_items(
                 false,
             ));
         }
-        if ahead > 0 && behind > 0 {
+        if behind > 0 && ahead > 0 {
+            // Diverged: the checked-out branch replays its unique commits
+            // onto the clicked tip (git rebase <base> <branch> — leaves the
+            // user on their branch). Counts are phrased from the rebased
+            // branch's perspective.
             items.push((
                 format!(
-                    "Rebase \"{}\" onto \"{}\" (ahead {ahead} / behind {behind})",
-                    subject.name, current.name
+                    "Rebase \"{}\" onto \"{}\" (ahead {behind} / behind {ahead})",
+                    current.name, subject.name
                 ),
                 IconName::RotateCcw,
                 BranchOp::Rebase {
-                    branch: subject.name.clone(),
-                    onto_ref: full_ref(current.kind, &current.name),
+                    branch: current.name.clone(),
+                    onto_ref: full_ref(subject.kind, &subject.name),
                 },
                 true,
             ));
@@ -606,9 +613,12 @@ fn integration_items(
             ));
         }
         if behind > 0 && ahead > 0 {
+            // Diverged: the checked-out branch replays its unique commits
+            // onto the remote tip. Counts from the rebased branch's
+            // perspective (its `ahead` is the subject's `behind`).
             items.push((
                 format!(
-                    "Rebase \"{}\" onto \"{}\" (ahead {ahead} / behind {behind})",
+                    "Rebase \"{}\" onto \"{}\" (ahead {behind} / behind {ahead})",
                     current.name, subject.name
                 ),
                 IconName::RotateCcw,
