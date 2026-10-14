@@ -66,4 +66,20 @@ impl TestRepo {
         repo.tag(name, &repo.find_object(target, None).expect("object"), &sig, "test: tag", true)
             .expect("create tag");
     }
+
+    /// Run the git binary in the repo (for flows grit-core itself shells
+    /// out for: branch/checkout/merge before git2-backed asserts).
+    #[allow(dead_code)]
+    pub fn cli(&self, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&self.repo.path)
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }

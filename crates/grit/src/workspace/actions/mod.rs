@@ -22,6 +22,7 @@ use grit_core::{
     Oid, Repo,
     branch::{Branch, BranchType},
     commit::Commit,
+    graph::GraphRow,
     status::{FileEntry, Status},
     tags::Tag,
 };
@@ -39,6 +40,9 @@ struct RepoSnapshot {
     branches: Vec<Branch>,
     current_branch: Option<Branch>,
     tags: Vec<Tag>,
+    /// The log with git's own lane art, `log` derived from it so the row
+    /// indexes stay parallel.
+    graph: Vec<GraphRow>,
     log: Vec<Commit>,
     stashes: Vec<Stash>,
     /// Ahead/behind counts between all branch tip pairs (`relations[a][b]`
@@ -58,7 +62,8 @@ impl RepoSnapshot {
         let branches = repo.branches()?;
         let current_branch = repo.current_branch()?;
         let tags = repo.tags()?;
-        let log = repo.commit_log_all(max_log)?;
+        let graph = repo.graph_log_all(max_log)?;
+        let log = graph.iter().map(|r| r.commit.clone()).collect();
         let stashes = repo.stashes()?;
 
         let mut tips: Vec<Oid> = branches.iter().map(|b| b.head).collect();
@@ -67,7 +72,7 @@ impl RepoSnapshot {
         let branch_relations =
             repo.ahead_behind_all(&tips).unwrap_or_else(|_| previous_relations.clone());
 
-        Ok(Self { status, branches, current_branch, tags, log, stashes, branch_relations })
+        Ok(Self { status, branches, current_branch, tags, graph, log, stashes, branch_relations })
     }
 }
 
@@ -128,6 +133,7 @@ impl Workspace {
         let mut tags = snapshot.tags;
         tags.sort_by_key(|t| std::cmp::Reverse(t.date));
         self.tags = tags;
+        self.graph_rows = snapshot.graph;
         self.log = snapshot.log;
         self.stashes = snapshot.stashes;
         self.branch_relations = snapshot.branch_relations;

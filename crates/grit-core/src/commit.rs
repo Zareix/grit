@@ -163,7 +163,7 @@ impl Repo {
     }
 }
 
-fn signature_to_owned(sig: git2::Signature<'_>, time: git2::Time) -> Signature {
+pub(crate) fn signature_to_owned(sig: git2::Signature<'_>, time: git2::Time) -> Signature {
     Signature {
         name: sig.name().unwrap_or_default().to_owned(),
         email: sig.email().unwrap_or_default().to_owned(),

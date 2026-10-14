@@ -19,7 +19,11 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+mod graph;
 mod refs;
+
+use graph::graph_lane_cell;
+use grit_core::graph::GraphRow;
 
 use crate::workspace::Workspace;
 use grit_core::Commit;
@@ -82,11 +86,19 @@ fn commit_row(
     ws: &Workspace,
     workspace: &WeakEntity<Workspace>,
     commit: &Commit,
+    row_ix: usize,
+    graph: Option<&GraphRow>,
     cx: &App,
 ) -> gpui_kit::AnyElement {
     let border = cx.theme().border;
     let foreground = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
+    // Parallel arrays (`graph_rows` mirrors `log`): neighbours for the
+    // node-stub connections.
+    let (prev_graph, next_graph) = (
+        row_ix.checked_sub(1).and_then(|ix| ws.graph_rows.get(ix)),
+        ws.log.get(row_ix + 1).and_then(|_| ws.graph_rows.get(row_ix + 1)),
+    );
     let oid = commit.id;
     let is_selected = ws.selected_commit.as_ref().is_some_and(|sel| sel.id == oid);
     let refs = ws.refs_by_commit.get(&oid).map(Vec::as_slice).unwrap_or(&[]);
@@ -120,17 +132,10 @@ fn commit_row(
         // same position. Right-clicks on the refs cell itself (gaps)
         // open nothing.
         .child(refs::ref_chips(refs, oid, workspace, cx))
-        // Graph lane placeholder: a plain node dot; the real graph (edges,
-        // lanes) comes later.
-        .child(
-            div()
-                .flex_none()
-                .w(px(GRAPH_W))
-                .min_w_0()
-                .flex()
-                .justify_center()
-                .child(div().size_2().rounded_full().bg(muted.opacity(0.6))),
-        )
+        // Graph lanes: git's own art re-painted (see `graph_lane_cell`).
+        // Neighbours matter: node stubs only connect where the lane really
+        // passes (branch tips stop short, first divergences too).
+        .child(graph_lane_cell(graph, prev_graph, next_graph, cx))
         .child(
             div()
                 .flex_1()
@@ -317,7 +322,15 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                         let index = ix - usize::from(has_wip);
                         match ws.log.get(index) {
                             Some(commit) => {
-                                commit_row(ws, &workspace, commit, cx).into_any_element()
+                                // Parallel arrays: a row's art is the one
+                                // whose commit id matches (defensive for
+                                // the pre-refresh first frame).
+                                let graph = ws
+                                    .graph_rows
+                                    .get(index)
+                                    .filter(|row| row.commit.id == commit.id);
+                                commit_row(ws, &workspace, commit, index, graph, cx)
+                                    .into_any_element()
                             }
                             None => div()
                                 .id(SharedString::from(format!("commit-empty-{ix}")))
