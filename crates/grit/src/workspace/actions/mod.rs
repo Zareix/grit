@@ -44,6 +44,9 @@ struct RepoSnapshot {
     graph: Option<GraphData>,
     log: Vec<Commit>,
     stashes: Vec<Stash>,
+    /// Commit of each stash, parallel to `stashes` (`None` when the stash's
+    /// commit failed to resolve — the row renders without clickable content).
+    stash_commits: Vec<Option<Commit>>,
     /// Ahead/behind counts between all branch tip pairs (`relations[a][b]`
     /// = commits unique to `a`, then commits unique to `b`). Shares a
     /// tip's row when two branches point at the same commit. On read
@@ -64,6 +67,10 @@ impl RepoSnapshot {
         let log = repo.commit_log_all(max_log)?;
         let graph = Some(GraphData::from_commits(&log));
         let stashes = repo.stashes()?;
+        // Each stash is a commit: resolve it for the history rows (its diff
+        // against its first parent is the stash's content). A stash whose
+        // commit fails to resolve keeps `None` and renders without content.
+        let stash_commits = stashes.iter().map(|stash| repo.find_commit(stash.oid).ok()).collect();
 
         let mut tips: Vec<Oid> = branches.iter().map(|b| b.head).collect();
         tips.sort_unstable();
@@ -71,7 +78,17 @@ impl RepoSnapshot {
         let branch_relations =
             repo.ahead_behind_all(&tips).unwrap_or_else(|_| previous_relations.clone());
 
-        Ok(Self { status, branches, current_branch, tags, graph, log, stashes, branch_relations })
+        Ok(Self {
+            status,
+            branches,
+            current_branch,
+            tags,
+            graph,
+            log,
+            stashes,
+            stash_commits,
+            branch_relations,
+        })
     }
 }
 
@@ -135,6 +152,7 @@ impl Workspace {
         self.graph = snapshot.graph;
         self.log = snapshot.log;
         self.stashes = snapshot.stashes;
+        self.stash_commits = snapshot.stash_commits;
         self.branch_relations = snapshot.branch_relations;
         self.rebuild_refs();
         self.prune_selection();

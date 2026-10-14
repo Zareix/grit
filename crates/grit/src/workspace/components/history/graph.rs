@@ -62,13 +62,15 @@ pub(super) fn graph_overlay(
                 return;
             }
             let has_wip = usize::from(!ws.status.is_empty());
+            // Stash rows sit between the WIP row and the first commit.
+            let stash_count = ws.stashes.len();
             let lane_w = px(LANE_W);
 
             let scroll = (-ws.log_scroll.0.borrow().base_handle.offset().y).max(px(0.));
             let first_visible = (scroll / row_h).floor() as usize;
-            // Rows visible = commit rows + the WIP row (painted above).
+            // Rows visible = commit rows + WIP + stash rows.
             let last_visible = (((scroll + bounds.size.height) / row_h).ceil() as usize)
-                .min(graph.lanes.len() + has_wip);
+                .min(graph.lanes.len() + has_wip + stash_count);
 
             let x = |column: usize| bounds.left() + lane_w * column as f32 + lane_w / 2.;
             // Row Y in CANVAS coordinates: the list's logical position
@@ -88,10 +90,12 @@ pub(super) fn graph_overlay(
                     if last < first_visible || first > last_visible {
                         continue;
                     }
-                    by_color
-                        .entry(line.color)
-                        .or_default()
-                        .push(build_line(line, &x, &rc, has_wip));
+                    by_color.entry(line.color).or_default().push(build_line(
+                        line,
+                        &x,
+                        &rc,
+                        has_wip + stash_count,
+                    ));
                 }
                 for (color, builders) in by_color {
                     let color_hsla = palette_color(color);
@@ -105,9 +109,25 @@ pub(super) fn graph_overlay(
                 }
 
                 // 2. Nodes, painted last so they sit over the lanes.
+                // Stash rows draw a warning-colored node in the first lane
+                // (they float above the log, not part of its DAG).
                 for row in first_visible..last_visible {
-                    let commit_ix = row.checked_sub(has_wip);
-                    let Some(commit_ix) = commit_ix else { continue };
+                    let commit_ix = row.checked_sub(has_wip + stash_count);
+                    let Some(commit_ix) = commit_ix else {
+                        // Rows below the first commit: the WIP row (skip),
+                        // then the stash rows in the first lane.
+                        let Some(stash_ix) = row.checked_sub(has_wip) else { continue };
+                        if stash_ix < stash_count {
+                            draw_commit_circle(
+                                x(0),
+                                rc(row),
+                                cx.theme().warning,
+                                cx.theme().background,
+                                window,
+                            );
+                        }
+                        continue;
+                    };
                     let Some(lane) = graph.lanes.get(commit_ix) else { continue };
                     draw_commit_circle(
                         x(lane.column),

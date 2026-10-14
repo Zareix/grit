@@ -7,12 +7,14 @@
 //! carry the sidebar's context menus on right-click; tags have no actions
 //! yet. The WIP row — shown when
 //! the current branch has pending changes — is item 0 of the same list so
-//! it scrolls with the commits; every row is 28px tall, which is the
-//! uniform height `uniform_list` requires.
+//! it scrolls with the commits; the stash rows follow (one node dot each,
+//! in a warning color, above the log's own lanes), then the commits.
+//! Every row is 28px tall, which is the uniform height `uniform_list`
+//! requires.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme as _, h_flex,
+    ActiveTheme as _, Icon, h_flex,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     v_flex,
 };
@@ -24,7 +26,7 @@ mod refs;
 
 use graph::{graph_overlay, gutter_width};
 
-use crate::workspace::Workspace;
+use crate::workspace::{Stash, Workspace};
 use grit_core::Commit;
 use grit_core::Oid;
 
@@ -232,6 +234,95 @@ fn commit_menu(
     menu
 }
 
+/// One stash row: the `stash@{N}` chip in the refs column, the stash
+/// message as the title, the stash commit's author + date; a click opens
+/// the stash's content (its commit details, diff included). The graph
+/// node is drawn by the overlay (distinct color), not here.
+fn stash_row(
+    ws: &Workspace,
+    workspace: &WeakEntity<Workspace>,
+    stash: &Stash,
+    commit: Option<&Commit>,
+    gutter: Pixels,
+    cx: &App,
+) -> Stateful<Div> {
+    let border = cx.theme().border;
+    let muted = cx.theme().muted_foreground;
+    let is_selected =
+        ws.selected_commit.as_ref().is_some_and(|sel| Some(sel.id) == commit.map(|c| c.id));
+
+    let mut row = h_flex()
+        .id(SharedString::from(format!("stash-{}", stash.index)))
+        .w_full()
+        .h_7()
+        .flex_none()
+        .px_3()
+        .gap_3()
+        .items_center()
+        .border_b_1()
+        .border_color(border.opacity(0.5))
+        .text_size(px(12.))
+        .when(is_selected, |this| this.bg(cx.theme().accent));
+
+    // A stash without a resolvable commit renders read-only.
+    if let Some(oid) = commit.map(|c| c.id) {
+        row = row.cursor_pointer().hover(|style| style.bg(border.opacity(0.4))).on_click({
+            let workspace = workspace.clone();
+            move |_, _, cx| {
+                workspace.update(cx, |ws, cx| ws.select_commit(oid, cx)).ok();
+            }
+        });
+    }
+
+    row.child(
+        // stash@{N} chip, where a branch chip would sit
+        h_flex()
+            .flex_none()
+            .w(px(REFS_W))
+            .min_w_0()
+            .gap_1()
+            .items_center()
+            .text_size(px(11.))
+            .text_color(muted)
+            .child(Icon::new(IconName::Archive).size_3())
+            .child(format!("stash@{{{}}}", stash.index)),
+    )
+    .child(div().flex_none().w(gutter).min_w_0())
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_color(cx.theme().warning)
+            .child(stash.message.clone()),
+    )
+    .child(
+        h_flex()
+            .flex_none()
+            .gap_3()
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(AUTHOR_W))
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(muted)
+                    .child(commit.map(|c| c.author.name.clone()).unwrap_or_else(|| "—".into())),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(DATE_W))
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(muted)
+                    .child(commit.map(|c| c.author.date_time()).unwrap_or_else(|| "—".into())),
+            ),
+    )
+}
+
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
@@ -245,7 +336,8 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     // nothing staged nor unstaged means no row at all.
     let changes = ws.status.staged.len() + ws.status.unstaged.len();
     let has_wip = changes > 0;
-    let item_count = ws.log.len() + usize::from(has_wip);
+    let stash_count = ws.stashes.len();
+    let item_count = ws.log.len() + stash_count + usize::from(has_wip);
 
     // The graph gutter grows with the topology (how many lanes the
     // layout ever used); every consumer — header, rows, overlay — takes
@@ -341,7 +433,22 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                                 if has_wip && ix == 0 {
                                     return wip_row(ws, &list_ws, gutter, cx).into_any_element();
                                 }
-                                let index = ix - usize::from(has_wip);
+                                let offset = ix - usize::from(has_wip);
+                                // Stash rows sit between the WIP row and the
+                                // commits, newest (stash@{0}) first.
+                                if let Some(stash) = ws.stashes.get(offset) {
+                                    let commit = ws.stash_commits.get(offset).cloned().flatten();
+                                    return stash_row(
+                                        ws,
+                                        &list_ws,
+                                        stash,
+                                        commit.as_ref(),
+                                        gutter,
+                                        cx,
+                                    )
+                                    .into_any_element();
+                                }
+                                let index = offset - stash_count;
                                 match ws.log.get(index) {
                                     Some(commit) => commit_row(ws, &list_ws, commit, gutter, cx)
                                         .into_any_element(),

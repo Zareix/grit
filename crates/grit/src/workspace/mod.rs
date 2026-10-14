@@ -197,6 +197,10 @@ pub struct Workspace {
     /// Stash entries (`git stash list`), shown in the branches column's
     /// bottom panel.
     stashes: Vec<Stash>,
+    /// Commit of each stash, parallel to `stashes` (`None` when the commit
+    /// failed to resolve); the history list reads these to show the stash
+    /// rows and open a stash's content.
+    stash_commits: Vec<Option<Commit>>,
     /// Whether the stash panel is collapsed (single toggle, no records).
     stashes_collapsed: bool,
     /// Remote branches rendered as a tree (`origin` → folders → leaves);
@@ -306,6 +310,7 @@ impl Workspace {
             remote_tags: None,
             remote_tags_attempt: None,
             stashes: Vec::new(),
+            stash_commits: Vec::new(),
             stashes_collapsed: false,
             remote_tree,
             remote_collapsed: HashSet::new(),

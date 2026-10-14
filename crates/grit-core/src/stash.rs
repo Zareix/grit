@@ -2,15 +2,18 @@
 
 use std::path::PathBuf;
 
+use crate::Oid;
 use crate::error::Result;
 use crate::repo::Repo;
 
-/// One entry of `git stash list`: the stack position (`stash@{index}`) and
-/// the message git wrote on it.
+/// One entry of `git stash list`: the stack position (`stash@{index}`), the
+/// message git wrote on it, and the stash's commit — its tree holds the
+/// stashed worktree state, so reading it is showing the stash's content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stash {
     pub index: usize,
     pub message: String,
+    pub oid: Oid,
 }
 
 /// git arguments for stashing exactly `paths` — worktree + index states go
@@ -32,8 +35,8 @@ impl Repo {
         let mut repo = self.git2()?;
         let mut out = Vec::new();
         // The callback stops at the first `false`.
-        repo.stash_foreach(|index, message, _oid| {
-            out.push(Stash { index, message: message.to_owned() });
+        repo.stash_foreach(|index, message, oid| {
+            out.push(Stash { index, message: message.to_owned(), oid: *oid });
             true
         })?;
         Ok(out)
