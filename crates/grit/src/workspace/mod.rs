@@ -78,6 +78,13 @@ pub enum BranchOp {
     /// the tip of local branch `from` — a fast-forward push. git refuses
     /// (safely, without force) when the remote tip has moved on.
     FastForwardPush { from: String, remote_branch: String },
+    /// Check out `branch` with its tip reset to `to_ref` (its upstream
+    /// tip). A non-checked-out branch force-moves its ref then switches
+    /// the worktree; the checked-out branch hard-resets in place — both
+    /// discard commits not on `to_ref`, so a diverged branch needs the
+    /// confirm dialog. When the branch is merely *behind* `to_ref` the
+    /// moves are fast-forward-only and effectively non-destructive.
+    ForceCheckout { branch: String, to_ref: String },
     /// Merge branch `what_ref` into the checked-out branch.
     Merge { what_ref: String },
     /// Rebase local branch `branch` onto `onto_ref`.
@@ -87,7 +94,9 @@ pub enum BranchOp {
 impl BranchOp {
     pub(crate) fn label(&self) -> &'static str {
         match self {
-            BranchOp::FastForward { .. } | BranchOp::FastForwardPush { .. } => "fast-forward",
+            BranchOp::FastForward { .. }
+            | BranchOp::FastForwardPush { .. }
+            | BranchOp::ForceCheckout { .. } => "fast-forward",
             BranchOp::Merge { .. } => "merge",
             BranchOp::Rebase { .. } => "rebase",
         }
@@ -97,6 +106,7 @@ impl BranchOp {
     pub(crate) fn confirm_label(&self) -> &'static str {
         match self {
             BranchOp::FastForward { .. } | BranchOp::FastForwardPush { .. } => "Fast-forward",
+            BranchOp::ForceCheckout { .. } => "Force checkout",
             BranchOp::Merge { .. } => "Merge",
             BranchOp::Rebase { .. } => "Rebase",
         }

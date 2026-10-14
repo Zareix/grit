@@ -279,8 +279,8 @@ pub(crate) fn remote_branch_menu(
     menu = menu.item(PopupMenuItem::new("Checkout").icon(IconName::GitBranch).on_click({
         let workspace = workspace.clone();
         let name = name.to_owned();
-        move |_, _, cx| {
-            workspace.update(cx, |ws, cx| ws.checkout_remote_branch(&name, cx)).ok();
+        move |_, window, cx| {
+            workspace.update(cx, |ws, cx| ws.checkout_remote_branch(&name, window, cx)).ok();
         }
     }));
 
@@ -402,8 +402,8 @@ pub(crate) fn branch_menu(
         PopupMenuItem::new("Checkout").icon(IconName::GitBranch).disabled(is_current).on_click({
             let workspace = workspace.clone();
             let name = name.clone();
-            move |_, _, cx| {
-                workspace.update(cx, |ws, cx| ws.checkout_branch(&name, cx)).ok();
+            move |_, window, cx| {
+                workspace.update(cx, |ws, cx| ws.checkout_branch(&name, window, cx)).ok();
             }
         }),
     );

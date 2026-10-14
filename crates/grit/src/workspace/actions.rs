@@ -18,6 +18,20 @@ use super::{BranchOp, CommitRef, CommitRefKind, CopyPath, CreateTarget, Workspac
 
 const MAX_LOG_COMMITS: usize = 500;
 
+/// How a checkout of a local branch should behave regarding its upstream
+/// tip, resolved by [`Workspace::checkout_sync`] from the live relations.
+enum CheckoutSync {
+    /// No upstream, in step with it, or ahead-only: plain checkout.
+    Plain,
+    /// Strictly behind the upstream tip: check out, then fast-forward the
+    /// branch up to it (`to_ref`, full git ref). Non-destructive.
+    Level(String),
+    /// Diverged from the upstream tip (`to_ref`, full git ref; `ahead`
+    /// unique local commits at risk, `behind` upstream commits to take):
+    /// confirm dialog, then force-checkout + reset.
+    Diverged { to_ref: String, ahead: usize, behind: usize },
+}
+
 /// Text payload of a destructive-action confirm dialog (see
 /// [`Workspace::open_confirm_dialog`]).
 struct ConfirmSpec {
@@ -481,13 +495,40 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(crate) fn checkout_branch(&mut self, name: &str, cx: &mut Context<Self>) {
+    pub(crate) fn checkout_branch(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(repo) = self.repo.clone() else { return };
-        match repo.checkout_branch(name) {
-            Ok(()) => self.refresh(cx),
-            Err(e) => {
-                self.error = Some(e.to_string().into());
-                cx.notify();
+        match self.checkout_sync(name) {
+            CheckoutSync::Plain => match repo.checkout_branch(name) {
+                Ok(()) => self.refresh(cx),
+                Err(e) => {
+                    self.error = Some(e.to_string().into());
+                    cx.notify();
+                }
+            },
+            CheckoutSync::Level(to_ref) => {
+                // Strictly behind the upstream: switch over, then
+                // fast-forward the branch up to the tracking tip.
+                match repo.checkout_branch(name) {
+                    Ok(()) => {
+                        self.refresh(cx);
+                        self.run_branch_op(
+                            BranchOp::FastForward { from: name.to_owned(), to_ref },
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        self.error = Some(e.to_string().into());
+                        cx.notify();
+                    }
+                }
+            }
+            CheckoutSync::Diverged { to_ref, ahead, behind } => {
+                self.open_force_checkout_dialog(name.to_owned(), to_ref, ahead, behind, window, cx);
             }
         }
     }
@@ -661,7 +702,24 @@ impl Workspace {
 
     /// Checkout a remote-tracking branch (`origin/main`) as a local tracking
     /// branch (`main`).
-    pub(crate) fn checkout_remote_branch(&mut self, name: &str, cx: &mut Context<Self>) {
+    pub(crate) fn checkout_remote_branch(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A local branch already tracking `name` (created by an earlier
+        // checkout) is reused: route through the plain-checkout policy so
+        // a stale branch is leveled up (asked for force when diverged).
+        if let Some(local) = self
+            .branches
+            .iter()
+            .find(|b| b.kind == BranchType::Local && b.upstream.as_deref() == Some(name))
+            .map(|b| b.name.clone())
+        {
+            self.checkout_branch(&local, window, cx);
+            return;
+        }
         let Some(repo) = self.repo.clone() else { return };
         match repo.checkout_remote_branch(name) {
             Ok(()) => self.refresh(cx),
@@ -701,6 +759,78 @@ impl Workspace {
         cx.notify();
     }
 
+    /// How a checkout of the local branch `name` should behave regarding
+    /// its upstream tip, resolved from the live branch relations.
+    fn checkout_sync(&self, name: &str) -> CheckoutSync {
+        let Some(local) =
+            self.branches.iter().find(|b| b.kind == BranchType::Local && b.name == name)
+        else {
+            return CheckoutSync::Plain;
+        };
+        let Some(upstream_name) = local.upstream.clone() else {
+            return CheckoutSync::Plain;
+        };
+        let Some(up) = self.branches.iter().find(|b| b.name == upstream_name) else {
+            return CheckoutSync::Plain;
+        };
+        let Some((ahead, behind)) =
+            self.branch_relations.get(&local.head).and_then(|row| row.get(&up.head)).copied()
+        else {
+            return CheckoutSync::Plain;
+        };
+        let to_ref = grit_core::branch::full_ref(up.kind, &up.name);
+        match (ahead, behind) {
+            (0, 0) => CheckoutSync::Plain, // in step with the upstream
+            (0, b) if b > 0 => CheckoutSync::Level(to_ref),
+            (a, b) if a > 0 && b > 0 => CheckoutSync::Diverged { to_ref, ahead: a, behind: b },
+            _ => CheckoutSync::Plain, // ahead-only: nothing to level
+        }
+    }
+
+    /// Force-checkout confirm dialog: a branch diverged from its upstream;
+    /// proceeding resets the branch to the upstream tip and discards the
+    /// local commits that are not on it.
+    pub(crate) fn open_force_checkout_dialog(
+        &mut self,
+        name: String,
+        to_ref: String,
+        ahead: usize,
+        behind: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let op = BranchOp::ForceCheckout { branch: name.clone(), to_ref: to_ref.clone() };
+        // Human spelling for the dialog; the op keeps the full ref.
+        let display =
+            to_ref.trim_start_matches("refs/heads/").trim_start_matches("refs/remotes/").to_owned();
+        let question = format!("Check out \"{name}\" and reset it to \"{display}\"?");
+        let detail = format!(
+            "\"{name}\" has diverged from \"{display}\": {ahead} commit(s) ahead, {behind} \
+             behind. A force checkout resets the branch to the upstream tip and discards \
+             the {ahead} local commit(s) not on it (still reachable through the reflog)."
+        );
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Force checkout?",
+                question,
+                detail,
+                confirm_label: "Force checkout",
+            },
+            move |ws, cx| {
+                if !ws.status.is_empty() {
+                    ws.error = Some(
+                        "Force checkout needs a clean working tree: commit or stash first.".into(),
+                    );
+                    cx.notify();
+                    return;
+                }
+                ws.run_branch_op(op.clone(), cx)
+            },
+            window,
+            cx,
+        );
+    }
+
     /// Run a remote operation on a background thread (network + credentials),
     /// then refresh the UI.
     pub(crate) fn run_remote(&mut self, op: grit_core::remote::RemoteOp, cx: &mut Context<Self>) {
@@ -718,20 +848,22 @@ impl Workspace {
     /// Arg spellings: a fast-forward of the checked-out branch goes through
     /// `merge --ff-only` so the working tree follows; any other branch
     /// moves its ref directly; the remote fast-forward is a plain push of
-    /// the local tip onto the remote branch (longest remote prefix wins).
+    /// the local tip onto the remote branch (longest remote prefix wins);
+    /// a force checkout resets the branch to the target tip (the
+    /// checked-out branch in place, the others before switching).
     pub(crate) fn run_branch_op(&mut self, op: BranchOp, cx: &mut Context<Self>) {
         if self.remote_busy.is_some() {
             return;
         }
         let current = self.current_branch.as_ref().map(|b| b.name.clone());
 
-        let args = match &op {
+        let steps: Vec<Vec<String>> = match &op {
             BranchOp::FastForward { from, to_ref } => {
-                if current.as_deref() == Some(from.as_str()) {
+                vec![if current.as_deref() == Some(from.as_str()) {
                     vec!["merge".into(), "--ff-only".into(), to_ref.clone()]
                 } else {
                     vec!["branch".into(), "--force".into(), from.clone(), to_ref.clone()]
-                }
+                }]
             }
             BranchOp::FastForwardPush { from, remote_branch } => {
                 let remotes = match self.repo.as_ref().map(grit_core::Repo::remotes) {
@@ -755,17 +887,29 @@ impl Workspace {
                     cx.notify();
                     return;
                 };
-                vec!["push".into(), remote, format!("refs/heads/{from}:refs/heads/{short}")]
+                vec![vec!["push".into(), remote, format!("refs/heads/{from}:refs/heads/{short}")]]
             }
-            BranchOp::Merge { what_ref } => vec!["merge".into(), what_ref.clone()],
+            BranchOp::ForceCheckout { branch, to_ref } => {
+                if current.as_deref() == Some(branch.as_str()) {
+                    // The branch is already checked out: reset it in place
+                    // (checked-out refs cannot be force-moved).
+                    vec![vec!["reset".into(), "--hard".into(), to_ref.clone()]]
+                } else {
+                    vec![
+                        vec!["branch".into(), "--force".into(), branch.clone(), to_ref.clone()],
+                        vec!["checkout".into(), branch.clone()],
+                    ]
+                }
+            }
+            BranchOp::Merge { what_ref } => vec![vec!["merge".into(), what_ref.clone()]],
             BranchOp::Rebase { branch, onto_ref } => {
                 // `<branch>` must be the SHORT branch name: a full ref makes
                 // git treat it as a commit and rebase "detached HEAD",
                 // leaving the branch ref unmoved.
-                vec!["rebase".into(), onto_ref.clone(), branch.clone()]
+                vec![vec!["rebase".into(), onto_ref.clone(), branch.clone()]]
             }
         };
-        self.run_git_remote(op.label(), args, cx);
+        self.run_git_steps(op.label(), steps, cx);
     }
 
     /// Destructive branch ops run through a confirm dialog first.
@@ -803,6 +947,14 @@ impl Workspace {
                 "The remote branch is advanced to the local tip with a plain push. Only \
                  accepted as a fast-forward — it refuses (without force) if the remote tip \
                  has moved on."
+                    .into(),
+            ),
+            BranchOp::ForceCheckout { branch, to_ref } => (
+                "Force checkout?",
+                format!("Check out \"{branch}\" and reset it to \"{to_ref}\"?"),
+                "The branch is set to the target tip and the working tree follows. Local \
+                 commits not on the target are discarded (still reachable through the \
+                 reflog)."
                     .into(),
             ),
         };
@@ -947,6 +1099,57 @@ impl Workspace {
                     Err(e) => {
                         this.error = Some(e.to_string().into());
                         cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Run a short sequence of git commands on the background thread,
+    /// stopping at the first failure; refreshes the UI afterwards either
+    /// way (a failed step often leaves repo state worth showing).
+    pub(crate) fn run_git_steps(
+        &mut self,
+        label: &'static str,
+        steps: Vec<Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        let Some(repo) = self.repo.clone() else { return };
+
+        self.remote_busy = Some(label);
+        self.info = None;
+        self.error = None;
+        cx.notify();
+
+        let job = cx.background_spawn(async move {
+            let mut out = String::new();
+            for step in &steps {
+                let text = repo.run_git(step)?;
+                out.push_str(&text);
+            }
+            Ok(out) as Result<String, grit_core::error::Error>
+        });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                this.remote_busy = None;
+                match &result {
+                    Ok(out) => {
+                        this.info = Some(if out.is_empty() {
+                            format!("{label}: ok").into()
+                        } else {
+                            format!("{label}: {out}").into()
+                        });
+                        this.refresh(cx);
+                    }
+                    Err(e) => {
+                        this.error = Some(e.to_string().into());
+                        this.refresh(cx);
                     }
                 }
             })
