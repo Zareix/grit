@@ -45,13 +45,17 @@ just check       # fast cargo check
   shell out to the `git` binary (`grit-core::remote`) so SSH/keychain credentials
   come from the user's git config — they run on the background executor.
 
-## GPUI Kit resources — doc FIRST
+## GPUI Kit resources — doc + examples FIRST, sources only on error
 
-- **Check the GPUI Kit doc before anything else**: <https://gpui-kit.com/llms.txt> is
-  the index of the full docs (paint, element lifecycle, components, …).
-- Only when the doc is silent or seems to describe another version, dig into the
-  installed crate source (`~/.cargo/registry/src/.../gpui-component-*`,
-  `~/.cargo/git/checkouts/gpui-kit-*/…`) and verify signatures — never invent APIs.
+- **All implementations are based on the online doc and its example code**
+  (<https://gpui-kit.com/llms.txt> is the index; per component
+  `https://gpui-kit.com/component/{name}.md`). Do **not** read the installed
+  crate sources (`~/.cargo/registry/src/.../gpui-component-*`,
+  `~/.cargo/git/checkouts/gpui-kit-*`) before writing code.
+- **Dig into the crate source only when the build fails or something breaks
+  at runtime**, to fix the doc/implementation mismatch — never proactively.
+- Never invent APIs: if a doc example doesn't compile, fix the code against
+  the exact build error, not by guessing the API shape.
 
 ## git2 0.21 gotchas (verified in source, not docs)
 

@@ -12,6 +12,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
+use crate::settings;
 use crate::workspace::{UpdateState, Workspace};
 
 /// Text payload of a destructive-action confirm dialog (see
@@ -294,7 +295,7 @@ impl Workspace {
         cx.notify();
     }
 
-    // ---- app launchers (IDE / terminal) ---------------------------------
+    // ---- app launchers (IDE / terminal / agent) --------------------------
 
     /// Open the repository in Zed; falls back to the system `open -a Zed`
     /// when the `zed` CLI is not on PATH.
@@ -326,6 +327,62 @@ impl Workspace {
         });
         self.run_launcher("terminal", job, cx);
     }
+
+    /// Launch the AI agent (the "Command" setting, `opencode -c` by default)
+    /// in a Warp tab dedicated to the current repository.
+    ///
+    /// The `warp://` deep link carries nothing but a Tab Config name, so the
+    /// launcher writes the dedicated `grit-agent` Tab Config first (the name
+    /// is reserved to Grit, so a user-maintained config is never clobbered):
+    /// `directory` = the repo, `commands` = the Agent command. A fresh Warp
+    /// window then opens it via `warp://tab_config/grit-agent?new_window=true`.
+    pub(crate) fn open_agent(&mut self, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let path = repo.path.to_string_lossy().into_owned();
+        let command = settings::agent_command(cx);
+        let job = cx.background_spawn(async move {
+            write_agent_tab_config(&path, &command)?;
+            try_open(&[(
+                "open".to_string(),
+                vec![format!("warp://tab_config/{AGENT_TAB_CONFIG}?new_window=true")],
+            )])
+        });
+        self.run_launcher("agent", job, cx);
+    }
+}
+
+/// Name of the dedicated Warp Tab Config Grit generates and owns; matching
+/// against the `.toml` file stem is case-insensitive.
+const AGENT_TAB_CONFIG: &str = "grit-agent";
+
+/// Write the `grit-agent` Tab Config into Warp's `tab_configs` directory:
+/// a single focused terminal pane running `command` in `directory`.
+fn write_agent_tab_config(directory: &str, command: &str) -> Result<(), String> {
+    let mut config_dir =
+        dirs::home_dir().ok_or_else(|| "cannot resolve the home directory".to_string())?;
+    config_dir.push(".warp");
+    config_dir.push("tab_configs");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("cannot create {config_dir:?}: {e}"))?;
+
+    let file = config_dir.join(format!("{AGENT_TAB_CONFIG}.toml"));
+    let toml = format!(
+        "name = \"Grit Agent\"\n\
+         [[panes]]\n\
+         id = \"main\"\n\
+         type = \"terminal\"\n\
+         directory = \"{}\"\n\
+         commands = [\"{}\"]\n\
+         is_focused = true\n",
+        toml_escape(directory),
+        toml_escape(command),
+    );
+    std::fs::write(&file, toml).map_err(|_| format!("cannot write {}", file.display()))
+}
+
+/// Escape a TOML basic-string body: backslash, then quote.
+fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Run each candidate launcher command until one exits successfully; the

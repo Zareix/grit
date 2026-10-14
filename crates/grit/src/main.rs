@@ -2,6 +2,7 @@
 
 mod about;
 mod session;
+mod settings;
 mod workspace;
 
 use gpui_kit::assets::{Assets as ComponentAssets, icon_assets};
@@ -22,6 +23,7 @@ icon_assets!(
         ArrowDown,
         ArrowUp,
         Archive,
+        Bot,
         Cloud,
         CloudDownload,
         Code,
@@ -31,6 +33,7 @@ icon_assets!(
         GitCommitHorizontal,
         GitMerge,
         RotateCcw,
+        Settings,
         Trash,
         GitBranch,
         Upload,
@@ -59,7 +62,7 @@ impl AssetSource for AppAssets {
     }
 }
 
-actions!(grit, [Quit, NewTab, CloseTab, About, CheckForUpdates]);
+actions!(grit, [Quit, NewTab, CloseTab, About, CheckForUpdates, Settings]);
 
 /// Route a tab-level action to the root [`Session`] of the active window.
 /// Same global-handler pattern as gpui-kit's inspector toggle: the binding
@@ -98,6 +101,9 @@ fn main() {
     application().with_assets(AppAssets).run(move |cx| {
         // Required before using any gpui-kit component.
         init(cx);
+        // Loading persisted settings into the app Global (kept in sync by
+        // the Settings window, read on demand by launchers).
+        settings::init(cx);
 
         // Follow the system appearance from startup (sync_system_appearance
         // with no window reads `cx.window_appearance()`); each window then
@@ -111,6 +117,8 @@ fn main() {
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-w", CloseTab, None),
             KeyBinding::new("cmd-t", NewTab, None),
+            // Standard macOS Settings shortcut (⌘,).
+            KeyBinding::new("cmd-,", Settings, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
         // Tab commands: bound without context (global), routed to the
@@ -118,15 +126,18 @@ fn main() {
         cx.on_action(|_: &NewTab, cx| route_tab_action(cx, |s, cx| s.open_new_tab(cx)));
         cx.on_action(|_: &CloseTab, cx| route_tab_action(cx, |s, cx| s.close_active_tab(cx)));
         cx.on_action(|_: &About, cx| about::open_about_window(cx));
+        cx.on_action(|_: &Settings, cx| settings::open_settings_window(cx));
         cx.on_action(|_: &CheckForUpdates, cx| {
             route_tab_action(cx, |s, cx| {
                 s.with_active_workspace(|ws, cx| ws.check_for_updates(cx), cx)
             })
         });
-        // macOS app menu, About first (convention), update check under it.
+        // macOS app menu, About first (convention), Settings + update check
+        // under it, Quit last.
         cx.set_menus([Menu::new("Grit").items([
             MenuItem::action("About Grit", About),
             MenuItem::action("Check for Updates", CheckForUpdates),
+            MenuItem::action("Settings…", Settings),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),

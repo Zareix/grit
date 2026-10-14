@@ -68,6 +68,16 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                         .loading(ws.remote_busy == Some("terminal"))
                         .disabled(ws.remote_busy.is_some())
                         .on_click(cx.listener(|this, _, _, cx| this.open_in_terminal(cx))),
+                )
+                .child(
+                    Button::new("open-agent")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Bot)
+                        .label("Agent")
+                        .loading(ws.remote_busy == Some("agent"))
+                        .disabled(ws.remote_busy.is_some())
+                        .on_click(cx.listener(|this, _, _, cx| this.open_agent(cx))),
                 ),
         )
         .child(div().flex_1())
