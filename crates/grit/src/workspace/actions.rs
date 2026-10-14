@@ -735,7 +735,10 @@ impl Workspace {
             }
             BranchOp::Merge { what_ref } => vec!["merge".into(), what_ref.clone()],
             BranchOp::Rebase { branch, onto_ref } => {
-                vec!["rebase".into(), onto_ref.clone(), format!("refs/heads/{branch}")]
+                // `<branch>` must be the SHORT branch name: a full ref makes
+                // git treat it as a commit and rebase "detached HEAD",
+                // leaving the branch ref unmoved.
+                vec!["rebase".into(), onto_ref.clone(), branch.clone()]
             }
         };
         self.run_git_remote(op.label(), args, cx);
