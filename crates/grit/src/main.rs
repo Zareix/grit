@@ -20,6 +20,7 @@ icon_assets!(
     [
         ArrowDown,
         ArrowUp,
+        Archive,
         Cloud,
         CloudDownload,
         Code,

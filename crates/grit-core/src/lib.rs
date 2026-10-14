@@ -8,6 +8,7 @@ pub mod diff;
 pub mod error;
 pub mod remote;
 pub mod repo;
+pub mod stash;
 pub mod status;
 pub mod tags;
 
@@ -17,6 +18,7 @@ pub use error::{Error, Result};
 pub use git2::Oid;
 pub use remote::RemoteOp;
 pub use repo::Repo;
+pub use stash::Stash;
 pub use status::FileEntry;
 pub use status::Status;
 pub use tags::Tag;

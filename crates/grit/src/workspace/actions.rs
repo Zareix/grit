@@ -69,13 +69,15 @@ impl Workspace {
             repo.current_branch(),
             repo.tags(),
             repo.commit_log_all(MAX_LOG_COMMITS),
+            repo.stashes(),
         ) {
-            (Ok(status), Ok(branches), Ok(current), Ok(tags), Ok(log)) => {
+            (Ok(status), Ok(branches), Ok(current), Ok(tags), Ok(log), Ok(stashes)) => {
                 self.status = status;
                 self.branches = branches;
                 self.current_branch = current;
                 self.tags = tags;
                 self.log = log;
+                self.stashes = stashes;
                 self.rebuild_refs();
                 self.compute_branch_relations(&repo);
                 self.prune_selection();
@@ -1243,6 +1245,91 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// Stash the selected staging files (`git stash push -u -- <paths>`,
+    /// background git job). Errors surface on the status bar like the other
+    /// background ops.
+    pub(crate) fn stash_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(paths) = (!self.selected_paths.is_empty()).then(|| self.selected_paths.clone())
+        else {
+            self.error = Some("No file selected to stash".into());
+            cx.notify();
+            return;
+        };
+        let args = grit_core::stash::stash_push_args(&paths);
+        self.run_git_steps("stash", vec![args], cx);
+    }
+
+    /// Reapply a stash entry, keeping it in the list. Sync git2 (local op);
+    /// conflicts surface as conflicted staging entries on refresh.
+    pub(crate) fn apply_stash(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        match repo.stash_apply(index) {
+            Ok(()) => self.refresh(cx),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                self.refresh(cx);
+            }
+        }
+    }
+
+    /// Reapply a stash entry and drop it.
+    pub(crate) fn pop_stash(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(mut repo) = self.repo.clone() else { return };
+        match repo.stash_pop(index) {
+            Ok(()) => self.refresh(cx),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                self.refresh(cx);
+            }
+        }
+    }
+
+    /// Discard-stash confirm dialog: the entry is gone afterwards.
+    pub(crate) fn open_stash_drop_dialog(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let message = self
+            .stashes
+            .iter()
+            .find(|s| s.index == index)
+            .map(|s| s.message.clone())
+            .unwrap_or_else(|| format!("stash@{{{index}}}"));
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Drop stash?",
+                question: format!("Drop \"{message}\"? ({index})"),
+                detail: "The stash entry is removed from the list; its commits stay \
+                         recoverable from the reflog while git keeps them."
+                    .into(),
+                confirm_label: "Drop",
+            },
+            move |ws, cx| ws.drop_stash(index, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Remove a stash entry from the list.
+    pub(crate) fn drop_stash(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(mut repo) = self.repo.clone() else { return };
+        match repo.stash_drop(index) {
+            Ok(()) => self.refresh(cx),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                self.refresh(cx);
+            }
+        }
+    }
+
+    /// Toggle the stash panel's collapsed state in the branches column.
+    pub(crate) fn toggle_stashes_collapsed(&mut self, cx: &mut Context<Self>) {
+        self.stashes_collapsed = !self.stashes_collapsed;
+        cx.notify();
     }
 
     // ---- app launchers (IDE / terminal) ---------------------------------

@@ -17,13 +17,14 @@ use gpui_kit::component::{
     input::Input,
     list::ListItem,
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
+    resizable_panel,
     tree::{TreeItem, tree},
-    v_flex,
+    v_flex, v_resizable,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use grit_core::Oid;
 use grit_core::branch::{Branch, BranchType, full_ref};
+use grit_core::{Oid, Stash};
 
 use super::primitives::SectionLabel;
 use crate::workspace::{BranchOp, Workspace};
@@ -99,15 +100,29 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .child(SectionLabel::new("LOCAL", cx))
                 .children(local_rows),
         )
-        // remotes: virtualized tree (scroll + expand/collapse handled by the
-        // component; it fills the remaining height in its own scroll region).
+        // remotes + stashes: vertical resizable pair (remotes fills, stash
+        // panel is capped and only visible when there are stashes).
         .child(
-            v_flex()
-                .flex_1()
-                .min_h_0()
-                .mt_1()
-                .child(div().px_1().child(SectionLabel::new("REMOTES", cx)))
-                .child(render_remote_tree(ws, cx)),
+            v_flex().flex_1().min_h_0().mt_1().child(
+                v_resizable("bottom-left")
+                    .with_state(&ws.bottom_layout)
+                    .child(
+                        resizable_panel().child(
+                            v_flex()
+                                .flex_1()
+                                .min_h_0()
+                                .child(div().px_1().child(SectionLabel::new("REMOTES", cx)))
+                                .child(render_remote_tree(ws, cx)),
+                        ),
+                    )
+                    .child(
+                        resizable_panel()
+                            .size(px(120.))
+                            .size_range(px(40.)..px(320.))
+                            .visible(!ws.stashes.is_empty())
+                            .child(render_stashes(ws, cx)),
+                    ),
+            ),
         )
 }
 
@@ -662,4 +677,113 @@ fn local_branch_row(
 ) -> gpui_kit::AnyElement {
     let is_current = ws.current_branch.as_ref().is_some_and(|c| c.name == branch.name);
     branch_row_shell(branch, cx, cx.theme().foreground, is_current)
+}
+
+// ---- stashes -------------------------------------------------------------
+
+/// The stash panel, styled like the staging column's sections: fixed header
+/// (title + count + collapse toggle) and stashes as single-line rows.
+fn render_stashes(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
+    let muted = cx.theme().muted_foreground;
+    let workspace = cx.entity().downgrade();
+    let count = ws.stashes.len();
+
+    v_flex()
+        .w_full()
+        .h_full()
+        .flex_none()
+        // header, always visible (collapsible through the chevron)
+        .child(
+            h_flex()
+                .px_2()
+                .py_1()
+                .gap_2()
+                .items_center()
+                .justify_between()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(muted)
+                .child(h_flex().gap_2().child("Stashes").child(format!("{count}")))
+                .child(
+                    Button::new("toggle-stashes")
+                        .ghost()
+                        .xsmall()
+                        .icon(if ws.stashes_collapsed {
+                            IconName::ChevronUp
+                        } else {
+                            IconName::ChevronDown
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_stashes_collapsed(cx))),
+                ),
+        )
+        // rows
+        .child(v_flex().flex_1().min_h_0().id("stash-list").overflow_y_scroll().pb_1().children(
+            if ws.stashes_collapsed {
+                Vec::new()
+            } else {
+                ws.stashes
+                    .iter()
+                    .map(|stash| stash_row(stash, workspace.clone(), cx))
+                    .collect::<Vec<_>>()
+            },
+        ))
+}
+
+/// One stash entry line: archive icon + message, actions on right-click.
+fn stash_row(
+    stash: &Stash,
+    workspace: WeakEntity<Workspace>,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let border = cx.theme().border;
+    let foreground = cx.theme().foreground;
+    let message = stash.message.clone();
+    let index = stash.index;
+
+    div()
+        .id(SharedString::from(format!("stash-{index}")))
+        .w_full()
+        .h_7()
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .rounded_sm()
+        .cursor_pointer()
+        .hover(|style| style.bg(border.opacity(0.4)))
+        .child(Icon::new(IconName::Archive).size_3().text_color(muted))
+        .child(div().min_w_0().truncate().text_size(px(12.)).text_color(foreground).child(message))
+        .context_menu(move |menu, _, cx| stash_menu(menu, index, &workspace, cx))
+        .into_any_element()
+}
+
+/// Right-click actions on a stash entry: reapply (keeping or taking it out
+/// of the list) and drop (confirm dialog).
+fn stash_menu(
+    mut menu: PopupMenu,
+    index: usize,
+    workspace: &WeakEntity<Workspace>,
+    _cx: &mut App,
+) -> PopupMenu {
+    menu = menu.item(PopupMenuItem::new("Apply").icon(IconName::RotateCcw).on_click({
+        let workspace = workspace.clone();
+        move |_, _, cx| {
+            workspace.update(cx, |ws, cx| ws.apply_stash(index, cx)).ok();
+        }
+    }));
+    menu = menu.item(PopupMenuItem::new("Pop").icon(IconName::ArrowDown).on_click({
+        let workspace = workspace.clone();
+        move |_, _, cx| {
+            workspace.update(cx, |ws, cx| ws.pop_stash(index, cx)).ok();
+        }
+    }));
+    menu = menu.separator();
+    menu = menu.item(PopupMenuItem::new("Drop").icon(IconName::Trash).on_click({
+        let workspace = workspace.clone();
+        move |_, window, cx| {
+            workspace.update(cx, |ws, cx| ws.open_stash_drop_dialog(index, window, cx)).ok();
+        }
+    }));
+    menu
 }

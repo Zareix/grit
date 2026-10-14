@@ -269,6 +269,8 @@ fn file_menu(
     } else {
         "Stage".to_owned()
     };
+    let stash_label =
+        if count > 1 { format!("Stash {count} files") } else { "Stash changes".to_owned() };
 
     menu = menu
         .item(
@@ -284,6 +286,12 @@ fn file_menu(
                     }
                 }),
         )
+        .item(PopupMenuItem::new(stash_label).icon(IconName::Archive).on_click({
+            let workspace = workspace.clone();
+            move |_, _, cx| {
+                workspace.update(cx, |ws, cx| ws.stash_selection(cx)).ok();
+            }
+        }))
         .item(PopupMenuItem::new("Discard changes").icon(IconName::RotateCcw).on_click({
             let workspace = workspace.clone();
             let path = path.to_owned();

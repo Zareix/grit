@@ -68,6 +68,9 @@ pub enum CreateTarget {
     Tag(Oid),
 }
 
+/// A stash in the branches column's stash panel.
+pub type Stash = grit_core::stash::Stash;
+
 /// Branch-to-branch operations. Targets are full git refs (`refs/heads/x`,
 /// `refs/remotes/origin/x`) so remote tips can serve as sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +149,11 @@ pub struct Workspace {
     branches: Vec<Branch>,
     current_branch: Option<Branch>,
     tags: Vec<Tag>,
+    /// Stash entries (`git stash list`), shown in the branches column's
+    /// bottom panel.
+    stashes: Vec<Stash>,
+    /// Whether the stash panel is collapsed (single toggle, no records).
+    stashes_collapsed: bool,
     /// Remote branches rendered as a tree (`origin` → folders → leaves);
     /// rebuilt from `branches` on every refresh.
     remote_tree: Entity<TreeState>,
@@ -162,6 +170,8 @@ pub struct Workspace {
     branch_relations: HashMap<Oid, HashMap<Oid, (usize, usize)>>,
     /// Horizontal panel layout: branches | center | staging.
     layout: Entity<ResizableState>,
+    /// Vertical split of the left column's bottom: remotes | stashes.
+    bottom_layout: Entity<ResizableState>,
     /// Vertical split of the center column: history | diff.
     center_layout: Entity<ResizableState>,
     /// Label of the remote operation currently running, if any.
@@ -210,6 +220,7 @@ impl Workspace {
 
         let layout = cx.new(|_| ResizableState::default());
         let center_layout = cx.new(|_| ResizableState::default());
+        let bottom_layout = cx.new(|_| ResizableState::default());
         let diff = cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Unified));
         let remote_tree = cx.new(|cx| TreeState::new(cx).items(Vec::new()));
         // Track collapse/expand so rebuilds (every refresh) keep the user's
@@ -241,12 +252,15 @@ impl Workspace {
             branches: Vec::new(),
             current_branch: None,
             tags: Vec::new(),
+            stashes: Vec::new(),
+            stashes_collapsed: false,
             remote_tree,
             remote_collapsed: HashSet::new(),
             refs_by_commit: HashMap::new(),
             branch_relations: HashMap::new(),
             layout,
             center_layout,
+            bottom_layout,
             remote_busy: None,
             info: None,
             log_scroll: UniformListScrollHandle::new(),
