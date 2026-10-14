@@ -47,12 +47,16 @@ impl Workspace {
         self.refresh(cx);
     }
 
-    /// Discard every local change to a file (staged + unstaged). Only called
-    /// from the confirm dialog.
-    pub(crate) fn discard_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    /// Discard local changes of every path in `paths` (staged + unstaged).
+    /// The multi-selection fan-out is done upfront by
+    /// [`Workspace::open_discard_dialog`]; the confirm closure only forwards
+    /// its resolved targets.
+    pub(crate) fn discard_files(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.clone() else { return };
-        if let Err(e) = repo.discard_file(&path) {
-            self.error = Some(e.to_string().into());
+        for path in &paths {
+            if let Err(e) = repo.discard_file(path) {
+                self.error = Some(e.to_string().into());
+            }
         }
         self.refresh(cx);
     }

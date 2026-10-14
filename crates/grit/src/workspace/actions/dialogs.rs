@@ -39,22 +39,35 @@ impl Workspace {
     }
 
     /// Discard confirm dialog: both staged and unstaged changes are lost.
+    /// When the right-clicked file sits inside the current multi-selection,
+    /// the confirmation covers all of its files instead.
     pub(crate) fn open_discard_dialog(
         &mut self,
         path: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let display = path.to_string_lossy().into_owned();
-        let owned = path.clone();
+        let paths: Vec<PathBuf> =
+            if self.selected_paths.len() > 1 && self.selected_paths.iter().any(|p| p == &path) {
+                self.selected_paths.clone()
+            } else {
+                vec![path]
+            };
+        let count = paths.len();
+
+        let question = if count == 1 {
+            format!("Discard all changes to \"{}\"?", paths[0].to_string_lossy())
+        } else {
+            format!("Discard all changes to {count} files?")
+        };
         self.open_confirm_dialog(
             ConfirmSpec {
                 title: "Discard changes?",
-                question: format!("Discard all changes to \"{display}\"?"),
+                question,
                 detail: "Both staged and unstaged changes are lost. This cannot be undone.".into(),
                 confirm_label: "Discard",
             },
-            move |ws, cx| ws.discard_file(owned.clone(), cx),
+            move |ws, cx| ws.discard_files(paths.clone(), cx),
             window,
             cx,
         );
