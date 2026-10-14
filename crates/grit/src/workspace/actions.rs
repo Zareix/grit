@@ -14,7 +14,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use grit_core::{Oid, RemoteOp, Repo, branch::BranchType};
 
-use super::{CommitRef, CommitRefKind, CopyPath, CreateTarget, Workspace};
+use super::{BranchOp, CommitRef, CommitRefKind, CopyPath, CreateTarget, Workspace};
 
 const MAX_LOG_COMMITS: usize = 500;
 
@@ -63,6 +63,7 @@ impl Workspace {
                 self.tags = tags;
                 self.log = log;
                 self.rebuild_refs();
+                self.compute_branch_relations(&repo);
                 self.sync_remote_tree(cx);
                 self.error = None;
                 self.sync_selection(&repo, cx);
@@ -72,6 +73,19 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Ahead/behind counts between all branch tip pairs, stored for the
+    /// branch context menus (`relations[a][b]` = commits unique to `a`,
+    /// then commits unique to `b`). Shares a tip's row when two branches
+    /// point at the same commit.
+    fn compute_branch_relations(&mut self, repo: &Repo) {
+        let mut tips: Vec<Oid> = self.branches.iter().map(|b| b.head).collect();
+        tips.sort_unstable();
+        tips.dedup();
+        self.branch_relations = repo
+            .ahead_behind_all(&tips)
+            .unwrap_or_else(|_| std::mem::take(&mut self.branch_relations));
     }
 
     /// Push the current remote branches into the tree state as a GitKraken-
@@ -673,9 +687,109 @@ impl Workspace {
         self.run_git_remote(op.name(), args.to_vec(), cx);
     }
 
-    /// Push, prompting to create the upstream branch first.
-    /// User-requested push; opens the set-upstream dialog when the current
-    /// branch does not track a remote yet.
+    /// Run a local branch-to-branch op through the git binary on the
+    /// background thread (a failed merge/rebase leaves the conflicts in the
+    /// worktree; refresh surfaces them as conflicted status entries).
+    ///
+    /// Arg spellings: a fast-forward of the checked-out branch goes through
+    /// `merge --ff-only` so the working tree follows; any other branch
+    /// moves its ref directly; the remote fast-forward is a plain push of
+    /// the local tip onto the remote branch (longest remote prefix wins).
+    pub(crate) fn run_branch_op(&mut self, op: BranchOp, cx: &mut Context<Self>) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        let current = self.current_branch.as_ref().map(|b| b.name.clone());
+
+        let args = match &op {
+            BranchOp::FastForward { from, to_ref } => {
+                if current.as_deref() == Some(from.as_str()) {
+                    vec!["merge".into(), "--ff-only".into(), to_ref.clone()]
+                } else {
+                    vec!["branch".into(), "--force".into(), from.clone(), to_ref.clone()]
+                }
+            }
+            BranchOp::FastForwardPush { from, remote_branch } => {
+                let remotes = match self.repo.as_ref().map(grit_core::Repo::remotes) {
+                    Some(Ok(remotes)) => remotes,
+                    _ => Vec::new(),
+                };
+                // Resolve the longest configured remote prefix, like
+                // `checkout_remote_branch` does (an old remote name shared
+                // by another must not shadow a longer one).
+                let mut hit: Option<(String, String)> = None;
+                for remote in remotes {
+                    if let Some(short) = remote_branch.strip_prefix(&format!("{remote}/"))
+                        && hit.as_ref().is_none_or(|(_, s)| short.len() < s.len())
+                    {
+                        hit = Some((remote, short.to_owned()));
+                    }
+                }
+                let Some((remote, short)) = hit else {
+                    self.error =
+                        Some(format!("Cannot fast-forward {remote_branch}: unknown remote").into());
+                    cx.notify();
+                    return;
+                };
+                vec!["push".into(), remote, format!("refs/heads/{from}:refs/heads/{short}")]
+            }
+            BranchOp::Merge { what_ref } => vec!["merge".into(), what_ref.clone()],
+            BranchOp::Rebase { branch, onto_ref } => {
+                vec!["rebase".into(), onto_ref.clone(), format!("refs/heads/{branch}")]
+            }
+        };
+        self.run_git_remote(op.label(), args, cx);
+    }
+
+    /// Destructive branch ops run through a confirm dialog first.
+    pub(crate) fn open_branch_op_dialog(
+        &mut self,
+        op: BranchOp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (title, question, detail) = match &op {
+            BranchOp::FastForward { from, to_ref } => (
+                "Fast-forward branch?",
+                format!("Fast-forward \"{from}\" to {to_ref}?"),
+                "The branch moves to the target tip. Only fast-forward moves are attempted; \
+                 the working tree follows when the branch is checked out."
+                    .into(),
+            ),
+            BranchOp::Merge { what_ref } => (
+                "Merge branch?",
+                format!("Merge {what_ref} into the current branch?"),
+                "Diverged histories are combined with a merge commit; conflicts, when any, \
+                 surface in the staging panel."
+                    .into(),
+            ),
+            BranchOp::Rebase { branch, onto_ref } => (
+                "Rebase branch?",
+                format!("Rebase \"{branch}\" onto {onto_ref}?"),
+                "The branch's unique commits are replayed onto the target. Already-rebased \
+                 commits are dropped; conflicts, when any, surface in the staging panel."
+                    .into(),
+            ),
+            BranchOp::FastForwardPush { from, remote_branch } => (
+                "Fast-forward remote branch?",
+                format!("Fast-forward \"{remote_branch}\" to \"{from}\"?"),
+                "The remote branch is advanced to the local tip with a plain push. Only \
+                 accepted as a fast-forward — it refuses (without force) if the remote tip \
+                 has moved on."
+                    .into(),
+            ),
+        };
+        let label = op.confirm_label();
+        self.open_confirm_dialog(
+            ConfirmSpec { title, question, detail, confirm_label: label },
+            move |ws, cx| ws.run_branch_op(op.clone(), cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Push; opens the set-upstream dialog when the current branch does not
+    /// track a remote yet.
     pub(crate) fn push(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.remote_busy.is_some() {
             return;

@@ -170,3 +170,82 @@ fn checkout_commit_detaches_head() {
     assert!(t.repo.current_branch().unwrap().is_none(), "detached HEAD");
     assert!(!t.repo.path.join("b.txt").exists(), "worktree back at first");
 }
+
+/// Diverged branches: each side sees the other's unique-commit count, and
+/// the relation is symmetric (rows mirror each other).
+#[test]
+fn ahead_behind_all_covers_pairs_and_symmetry() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("c1");
+    t.repo.create_branch("feature").unwrap();
+
+    // main: c1 -> c2 / feature: c1 -> c3
+    t.write_and_stage("main-only.txt", "m");
+    t.commit("c2");
+    t.repo.checkout_branch("feature").unwrap();
+    t.write_and_stage("feature-only.txt", "f");
+    t.commit("c3");
+    t.repo.checkout_branch("main").unwrap();
+
+    let mut heads = t.repo.branches().unwrap();
+    heads.sort_by(|a, b| a.name.cmp(&b.name));
+    assert!(heads[0].head != heads[1].head, "tips diverged");
+    let tips: Vec<_> = heads.iter().map(|b| b.head).collect();
+
+    let relations = t.repo.ahead_behind_all(&tips).unwrap();
+    for a in &heads {
+        for b in &heads {
+            if a.name == b.name {
+                continue;
+            }
+            let (ahead, behind) = relations[&a.head][&b.head];
+            // One commit on each side, whichever way the row is read.
+            assert_eq!((ahead, behind), (1, 1), "{} vs {}", a.name, b.name);
+        }
+    }
+}
+
+/// Branches pointing at the same commit report (0, 0) both ways.
+#[test]
+fn ahead_behind_all_shared_tip_is_neutral() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    let tip = t.commit("c1");
+    t.repo.create_branch("feature").unwrap();
+
+    let heads = t.repo.branches().unwrap();
+    let tips: Vec<_> = heads.iter().map(|b| b.head).collect();
+    let relations = t.repo.ahead_behind_all(&tips).unwrap();
+
+    for a in &heads {
+        for b in &heads {
+            assert_eq!(relations[&a.head][&b.head], (0, 0), "{} vs {}", a.name, b.name);
+        }
+    }
+    assert_eq!(heads[0].head, tip);
+}
+
+/// A branch strictly behind another reports zero ahead; the branch ahead
+/// of it sees the same pair mirrored.
+#[test]
+fn ahead_behind_all_tracks_ancestry() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("c1");
+    let tip_before = t.repo.current_branch().unwrap().unwrap().head;
+    t.repo.create_branch("behind").unwrap();
+    t.write_and_stage("b.txt", "2");
+    t.commit("c2");
+
+    let heads = t.repo.branches().unwrap();
+    let tips: Vec<_> = heads.iter().map(|b| b.head).collect();
+    let relations = t.repo.ahead_behind_all(&tips).unwrap();
+
+    let behind = heads.iter().find(|b| b.name == "behind").unwrap();
+    let main = heads.iter().find(|b| b.name == "main").unwrap();
+    let (ahead, total_behind) = relations[&behind.head][&main.head];
+    assert_eq!(ahead, 0, "behind has no unique commits");
+    assert_eq!(total_behind, 1, "main is one ahead");
+    assert_eq!(behind.head, tip_before);
+}

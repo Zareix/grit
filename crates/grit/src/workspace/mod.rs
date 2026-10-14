@@ -68,6 +68,41 @@ pub enum CreateTarget {
     Tag(Oid),
 }
 
+/// Branch-to-branch operations. Targets are full git refs (`refs/heads/x`,
+/// `refs/remotes/origin/x`) so remote tips can serve as sources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchOp {
+    /// Move local branch `from` to the tip of `to_ref`, only fast-forward.
+    FastForward { from: String, to_ref: String },
+    /// Advance the remote branch `remote_branch` (like `origin/main`) to
+    /// the tip of local branch `from` — a fast-forward push. git refuses
+    /// (safely, without force) when the remote tip has moved on.
+    FastForwardPush { from: String, remote_branch: String },
+    /// Merge branch `what_ref` into the checked-out branch.
+    Merge { what_ref: String },
+    /// Rebase local branch `branch` onto `onto_ref`.
+    Rebase { branch: String, onto_ref: String },
+}
+
+impl BranchOp {
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            BranchOp::FastForward { .. } | BranchOp::FastForwardPush { .. } => "fast-forward",
+            BranchOp::Merge { .. } => "merge",
+            BranchOp::Rebase { .. } => "rebase",
+        }
+    }
+
+    /// Confirm-dialog button text (capitalized).
+    pub(crate) fn confirm_label(&self) -> &'static str {
+        match self {
+            BranchOp::FastForward { .. } | BranchOp::FastForwardPush { .. } => "Fast-forward",
+            BranchOp::Merge { .. } => "Merge",
+            BranchOp::Rebase { .. } => "Rebase",
+        }
+    }
+}
+
 pub struct Workspace {
     repo: Option<Repo>,
     /// Source of truth for counts / commit button state.
@@ -101,6 +136,11 @@ pub struct Workspace {
     /// Refs (branches + tags) grouped by the commit they point to, for the
     /// log's ref chips.
     refs_by_commit: HashMap<Oid, Vec<CommitRef>>,
+    /// Ahead/behind counts between every pair of branch tips, keyed
+    /// `relations[a][b]` (commits unique to `a`, commits unique to `b`).
+    /// Filled on refresh; drives the coherence of the branch context-menu
+    /// entries (fast-forward / merge / rebase).
+    branch_relations: HashMap<Oid, HashMap<Oid, (usize, usize)>>,
     /// Horizontal panel layout: branches | center | staging.
     layout: Entity<ResizableState>,
     /// Vertical split of the center column: history | diff.
@@ -182,6 +222,7 @@ impl Workspace {
             remote_tree,
             remote_collapsed: HashSet::new(),
             refs_by_commit: HashMap::new(),
+            branch_relations: HashMap::new(),
             layout,
             center_layout,
             remote_busy: None,

@@ -22,10 +22,11 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use grit_core::branch::{Branch, BranchType};
+use grit_core::Oid;
+use grit_core::branch::{Branch, BranchType, full_ref};
 
 use super::primitives::SectionLabel;
-use crate::workspace::Workspace;
+use crate::workspace::{BranchOp, Workspace};
 use grit_core::remote::RemoteOp;
 
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
@@ -255,23 +256,24 @@ fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         item
     })
     // Only leaves act; the empty menu never opens for folders.
-    .context_menu(move |_ix, entry, menu, _window, _cx| {
+    .context_menu(move |_ix, entry, menu, _, cx| {
         if entry.is_folder() {
             return menu;
         }
         let name = entry.item().id.to_string();
-        remote_branch_menu(menu, &name, &workspace_for_menu)
+        remote_branch_menu(menu, &name, &workspace_for_menu, cx)
     });
 
     div().flex_1().min_h_0().px_1().child(tree)
 }
 
-/// Leaf menu: checkout as a local tracking branch, and delete the branch
-/// on its server.
+/// Leaf menu: checkout as a local tracking branch, fast-forward / merge
+/// moves coherent with the remote tip, and delete the branch on its server.
 pub(crate) fn remote_branch_menu(
     mut menu: PopupMenu,
     name: &str,
     workspace: &WeakEntity<Workspace>,
+    cx: &mut App,
 ) -> PopupMenu {
     // Checkout
     menu = menu.item(PopupMenuItem::new("Checkout").icon(IconName::GitBranch).on_click({
@@ -283,6 +285,16 @@ pub(crate) fn remote_branch_menu(
     }));
 
     menu = menu.separator();
+
+    // Integration moves relative to this remote tip (fast-forward of the
+    // checked-out branch onto it, merge into checked-out branch).
+    if let Some(entity) = workspace.upgrade() {
+        let subject = entity.read(cx).branches.iter().find(|b| b.name == name).cloned();
+        if let Some(subject) = subject {
+            menu = integration_items(menu, &subject, workspace, cx);
+            menu = menu.separator();
+        }
+    }
 
     // Delete (removes the branch from the remote server)
     menu = menu.item(PopupMenuItem::new("Delete").icon(IconName::Trash).on_click({
@@ -364,14 +376,14 @@ fn branch_row_shell(
             .dropdown_menu({
                 let workspace = workspace.clone();
                 let branch = branch.clone();
-                move |menu, _, _| branch_menu(menu, &branch, is_current, &workspace)
+                move |menu, _, cx| branch_menu(menu, &branch, is_current, &workspace, cx)
             }),
     );
 
     // Same menu on right-click.
     row.context_menu({
         let branch = branch.clone();
-        move |menu, _, _| branch_menu(menu, &branch, is_current, &workspace)
+        move |menu, _, cx| branch_menu(menu, &branch, is_current, &workspace, cx)
     })
     .into_any_element()
 }
@@ -381,6 +393,7 @@ pub(crate) fn branch_menu(
     branch: &Branch,
     is_current: bool,
     workspace: &WeakEntity<Workspace>,
+    cx: &mut App,
 ) -> PopupMenu {
     let name = branch.name.clone();
 
@@ -405,6 +418,10 @@ pub(crate) fn branch_menu(
             }
         }),
     );
+
+    // Integration moves (fast-forward / merge / rebase) coherent with the
+    // branches' commits.
+    menu = integration_items(menu, branch, workspace, cx);
 
     // Set upstream (retarget always allowed, but only via its own dialog)
     menu = menu.item(
@@ -433,6 +450,198 @@ pub(crate) fn branch_menu(
     );
 
     // The menu is anchored under the row; text weight is inherited deliberately.
+    menu
+}
+
+/// Ahead/behind-coherent integration entries for a branch context menu,
+/// restricted to the pair (clicked branch, current branch). Flat items —
+/// one per valid move, labeled with the branch names and the counts that
+/// make them coherent. Reads live relations through `workspace`.
+///
+/// `(ahead, behind)` counts commits unique to the clicked branch, then
+/// commits unique to the current branch. Moves offered:
+///
+/// - clicked strictly behind: its ref *fast-forwards* to the current tip.
+/// - clicked with unique commits (`ahead > 0`): it **merges into** the
+///   current branch (git fast-forwards when the current branch has nothing
+///   unique, creates a merge commit otherwise).
+/// - when the current branch has nothing unique (`behind == 0`) and the
+///   clicked branch has commits (`ahead > 0`), a plain *fast-forward jump*
+///   of the current branch onto the tip is offered next to the merge —
+///   both reach the same history state, merge just goes through the
+///   merger machinery.
+/// - diverged: additionally rebase the clicked branch onto the current tip
+///   (confirm dialog — history rewrite).
+///
+/// For a clicked *remote* tip the ref itself cannot move, so the current
+/// branch is the one that acts (fast-forward jump/merge/rebase against the
+/// remote tip); when the remote tip is fully contained in the current
+/// branch, the offered fast-forward *advances the remote ref* via a
+/// non-force push. Same counting rules.
+fn integration_items(
+    mut menu: PopupMenu,
+    subject: &Branch,
+    workspace: &WeakEntity<Workspace>,
+    cx: &mut App,
+) -> PopupMenu {
+    let Some(entity) = workspace.upgrade() else { return menu };
+    if subject.head == Oid::ZERO_SHA1 {
+        return menu;
+    }
+    let ws = entity.read(cx);
+    let Some(current) = ws.current_branch.as_ref().filter(|c| c.name != subject.name) else {
+        return menu;
+    };
+    let Some((ahead, behind)) =
+        ws.branch_relations.get(&subject.head).and_then(|row| row.get(&current.head)).copied()
+    else {
+        return menu;
+    };
+    if ahead == 0 && behind == 0 {
+        return menu; // same tip: nothing to move
+    }
+
+    // (label, icon, op, needs confirm dialog)
+    let mut items: Vec<(String, IconName, BranchOp, bool)> = Vec::new();
+    if subject.kind == BranchType::Local {
+        if ahead == 0 && behind > 0 {
+            items.push((
+                format!(
+                    "Fast-forward \"{}\" to \"{}\" (behind {behind})",
+                    subject.name, current.name
+                ),
+                IconName::FastForward,
+                BranchOp::FastForward {
+                    from: subject.name.clone(),
+                    to_ref: full_ref(current.kind, &current.name),
+                },
+                false,
+            ));
+        }
+        if ahead > 0 && behind == 0 {
+            // The subject is strictly ahead: the current branch can jump
+            // straight to it (fast-forward only), or pull it in through a
+            // merge — both land on the same history state.
+            items.push((
+                format!(
+                    "Fast-forward \"{}\" to \"{}\" (behind {ahead})",
+                    current.name, subject.name
+                ),
+                IconName::FastForward,
+                BranchOp::FastForward {
+                    from: current.name.clone(),
+                    to_ref: full_ref(subject.kind, &subject.name),
+                },
+                false,
+            ));
+        }
+        if ahead > 0 {
+            items.push((
+                format!("Merge \"{}\" into \"{}\" (ahead {ahead})", subject.name, current.name),
+                IconName::GitMerge,
+                BranchOp::Merge { what_ref: full_ref(subject.kind, &subject.name) },
+                false,
+            ));
+        }
+        if ahead > 0 && behind > 0 {
+            items.push((
+                format!(
+                    "Rebase \"{}\" onto \"{}\" (ahead {ahead} / behind {behind})",
+                    subject.name, current.name
+                ),
+                IconName::RotateCcw,
+                BranchOp::Rebase {
+                    branch: subject.name.clone(),
+                    onto_ref: full_ref(current.kind, &current.name),
+                },
+                true,
+            ));
+        }
+    } else {
+        // Remote tip: the local ref cannot move it, so the current branch (or
+        // the remote branch itself via push) is the one that acts — same
+        // counting rules as for a local subject.
+        if ahead == 0 && behind > 0 {
+            // Remote tip fully contained in the current branch: advance the
+            // remote ref with a fast-forward push.
+            items.push((
+                format!(
+                    "Fast-forward \"{}\" to \"{}\" (behind {behind})",
+                    subject.name, current.name
+                ),
+                IconName::FastForward,
+                BranchOp::FastForwardPush {
+                    from: current.name.clone(),
+                    remote_branch: subject.name.clone(),
+                },
+                true,
+            ));
+        }
+        if ahead > 0 && behind == 0 {
+            // The current branch is strictly behind the tip: it can jump
+            // straight there (fast-forward only), or take the commits
+            // through a merge — both land on the same history state.
+            items.push((
+                format!(
+                    "Fast-forward \"{}\" to \"{}\" (behind {ahead})",
+                    current.name, subject.name
+                ),
+                IconName::FastForward,
+                BranchOp::FastForward {
+                    from: current.name.clone(),
+                    to_ref: full_ref(subject.kind, &subject.name),
+                },
+                false,
+            ));
+        }
+        if ahead > 0 {
+            // The current branch lacks the tip's commits: merge it in —
+            // git fast-forwards when the current branch itself has
+            // nothing unique.
+            items.push((
+                format!("Merge \"{}\" into \"{}\" (ahead {ahead})", subject.name, current.name),
+                IconName::GitMerge,
+                BranchOp::Merge { what_ref: full_ref(subject.kind, &subject.name) },
+                false,
+            ));
+        }
+        if behind > 0 && ahead > 0 {
+            items.push((
+                format!(
+                    "Rebase \"{}\" onto \"{}\" (ahead {ahead} / behind {behind})",
+                    current.name, subject.name
+                ),
+                IconName::RotateCcw,
+                BranchOp::Rebase {
+                    branch: current.name.clone(),
+                    onto_ref: full_ref(subject.kind, &subject.name),
+                },
+                true,
+            ));
+        }
+    }
+
+    if items.is_empty() {
+        return menu;
+    }
+    menu = menu.separator();
+    for (label, icon, op, confirm) in items {
+        menu = menu.item(PopupMenuItem::new(label).icon(icon).on_click({
+            let workspace = workspace.clone();
+            move |_, window, cx| {
+                workspace
+                    .update(cx, |ws, cx| {
+                        if confirm {
+                            ws.open_branch_op_dialog(op.clone(), window, cx)
+                        } else {
+                            ws.run_branch_op(op.clone(), cx)
+                        }
+                    })
+                    .ok();
+            }
+        }));
+    }
+
     menu
 }
 

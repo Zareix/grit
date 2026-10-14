@@ -173,16 +173,21 @@ fn ref_menu(
 ) -> PopupMenu {
     let Some(entity) = workspace.upgrade() else { return menu };
     match r.kind {
-        CommitRefKind::Local => match entity
-            .read(cx)
-            .branches
-            .iter()
-            .find(|b| b.kind == BranchType::Local && b.name == r.name)
-        {
-            Some(branch) => branch_menu(menu, branch, r.is_current, workspace),
-            None => menu,
-        },
-        CommitRefKind::Remote => remote_branch_menu(menu, &r.name, workspace),
+        CommitRefKind::Local => {
+            // Clone the branch up front: `branch_menu` mutably re-uses `cx`.
+            let branch = entity
+                .read(cx)
+                .branches
+                .iter()
+                .find(|b| b.kind == BranchType::Local && b.name == r.name)
+                .cloned();
+            if let Some(branch) = branch {
+                branch_menu(menu, &branch, r.is_current, workspace, cx)
+            } else {
+                menu
+            }
+        }
+        CommitRefKind::Remote => remote_branch_menu(menu, &r.name, workspace, cx),
         CommitRefKind::Tag => menu,
     }
 }

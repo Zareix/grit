@@ -1,5 +1,7 @@
 //! Branches.
 
+use std::collections::HashMap;
+
 use git2::Oid;
 
 use crate::error::Result;
@@ -20,6 +22,19 @@ pub struct Branch {
     /// For local branches: the upstream tracking branch, if any.
     pub upstream: Option<String>,
 }
+
+/// Full ref name of a branch (`refs/heads/x` / `refs/remotes/origin/x`),
+/// usable as an unambiguous git argument.
+pub fn full_ref(kind: BranchType, name: &str) -> String {
+    match kind {
+        BranchType::Local => format!("refs/heads/{name}"),
+        BranchType::Remote => format!("refs/remotes/{name}"),
+    }
+}
+
+/// Ahead/behind counts between pairs of tips, keyed `relations[a][b]` =
+/// (commits unique to `a`, commits unique to `b`).
+pub type AheadBehindMap = HashMap<Oid, HashMap<Oid, (usize, usize)>>;
 
 impl Repo {
     /// All branches, local first, sorted by name.
@@ -162,5 +177,36 @@ impl Repo {
         }
         branch.delete()?;
         Ok(())
+    }
+
+    /// Commits unique to each tip: (`ahead`, `behind`) — commits reachable
+    /// from `a` but not from `b`, then the other way round. For unrelated
+    /// histories every commit counts on each side.
+    pub fn ahead_behind(&self, a: Oid, b: Oid) -> Result<(usize, usize)> {
+        Ok(self.git2()?.graph_ahead_behind(a, b)?)
+    }
+
+    /// Ahead/behind counts between every pair of the given tips (e.g. branch
+    /// heads), keyed by tip OID. `relations[a][b]` counts commits unique to
+    /// `a`, then commits unique to `b`. Duplicate OIDs are collapsed; a tip
+    /// compared with itself stays (0, 0).
+    pub fn ahead_behind_all(&self, tips: &[Oid]) -> Result<AheadBehindMap> {
+        let repo = self.git2()?;
+        let mut tips = tips.to_vec();
+        tips.sort_unstable();
+        tips.dedup();
+        let mut out: AheadBehindMap = HashMap::new();
+        for (i, &a) in tips.iter().enumerate() {
+            for &b in tips.iter().skip(i + 1) {
+                let counts = repo.graph_ahead_behind(a, b)?;
+                out.entry(b).or_default().insert(a, (counts.1, counts.0));
+                out.entry(a).or_default().insert(b, counts);
+            }
+        }
+        for &t in &tips {
+            let row = out.entry(t).or_default();
+            row.entry(t).or_insert((0, 0)); // self-comparison is always equal
+        }
+        Ok(out)
     }
 }
