@@ -131,7 +131,9 @@ jobs:
         with:
           name: grit-macos
           path: grit-${{ needs.version.outputs.version }}-aarch64-macos.dmg
-          if-no-files-found: error  build-windows:
+          if-no-files-found: error
+
+  build-windows:
     name: Build Windows (x64)
     runs-on: windows-latest
     needs: [version]
