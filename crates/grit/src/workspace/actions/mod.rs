@@ -1,0 +1,344 @@
+//! Workspace actions: everything the UI can trigger on the model.
+//!
+//! Topic submodules hold the action groups (`fs` for staging and file
+//! operations, `commit` for the selection + commit machinery, `branches`
+//! for checkout / ref creation / stashes, `remote` for network and
+//! branch-to-branch operations, `dialogs` for the shared dialogs and
+//! launchers); this module keeps the refresh / state plumbing, the shared
+//! background git-job runners and the diff panel machinery.
+
+mod branches;
+mod commit;
+mod dialogs;
+mod fs;
+mod remote;
+
+use gpui_kit::component::diff::{DiffFile, DiffMode};
+use gpui_kit::*;
+use grit_core::{Oid, Repo, branch::BranchType, status::FileEntry};
+
+use super::{CommitRef, CommitRefKind, Workspace};
+
+/// Commit-log depth loaded on every refresh; also quoted by the
+/// "older than window" info message in `reveal_branch`.
+pub(crate) const MAX_LOG_COMMITS: usize = 500;
+
+impl Workspace {
+    pub(crate) fn open(&mut self, path: String, cx: &mut Context<Self>) {
+        match Repo::open(&path) {
+            Ok(repo) => {
+                self.error = None;
+                self.repo = Some(repo);
+                self.refresh(cx);
+            }
+            Err(e) => {
+                self.repo = None;
+                self.error = Some(format!("Failed to open \"{path}\": {e}").into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Reload status, branches and commit log from disk.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
+
+        match (
+            repo.status(),
+            repo.branches(),
+            repo.current_branch(),
+            repo.tags(),
+            repo.commit_log_all(MAX_LOG_COMMITS),
+            repo.stashes(),
+        ) {
+            (Ok(status), Ok(branches), Ok(current), Ok(tags), Ok(log), Ok(stashes)) => {
+                self.status = status;
+                self.branches = branches;
+                self.current_branch = current;
+                self.tags = tags;
+                self.log = log;
+                self.stashes = stashes;
+                self.rebuild_refs();
+                self.compute_branch_relations(&repo);
+                self.prune_selection();
+                self.sync_remote_tree(cx);
+                self.error = None;
+                self.sync_selection(&repo, cx);
+            }
+            _ => {
+                self.error = Some("Failed to read repository state".into());
+            }
+        }
+        cx.notify();
+    }
+
+    /// Ahead/behind counts between all branch tip pairs, stored for the
+    /// branch context menus (`relations[a][b]` = commits unique to `a`,
+    /// then commits unique to `b`). Shares a tip's row when two branches
+    /// point at the same commit.
+    fn compute_branch_relations(&mut self, repo: &Repo) {
+        let mut tips: Vec<Oid> = self.branches.iter().map(|b| b.head).collect();
+        tips.sort_unstable();
+        tips.dedup();
+        self.branch_relations = repo
+            .ahead_behind_all(&tips)
+            .unwrap_or_else(|_| std::mem::take(&mut self.branch_relations));
+    }
+
+    /// Drop the selection's files that left the selected staging side:
+    /// staging/unstaging rewrites both lists and stale paths must not stay
+    /// highlighted. `selected_path` is cleaned by `sync_selection` itself.
+    fn prune_selection(&mut self) {
+        let side: &Vec<FileEntry> =
+            if self.selected_staged { &self.status.staged } else { &self.status.unstaged };
+        self.selected_paths.retain(|p| side.iter().any(|e| e.path == *p));
+        if let Some(anchor) = &self.selection_anchor
+            && !self.selected_paths.iter().any(|p| p == anchor)
+        {
+            self.selection_anchor = None;
+        }
+    }
+
+    /// Push the current remote branches into the tree state as a GitKraken-
+    /// style hierarchy (remote root → folders per `/` segment → leaves), and
+    /// prune collapse records for folders that no longer exist.
+    fn sync_remote_tree(&mut self, cx: &mut Context<Self>) {
+        let items = super::components::branches::remote_tree_items(self);
+        super::components::branches::prune_collapsed(items.iter(), &mut self.remote_collapsed);
+        self.remote_tree.update(cx, |state, cx| state.set_items(items, cx));
+    }
+
+    /// Regroup branches + tags by the commit they point at, for the log's
+    /// ref chips. Per commit: local branches first, then tags, then remotes.
+    pub(crate) fn rebuild_refs(&mut self) {
+        self.refs_by_commit.clear();
+        let current = self.current_branch.as_ref().map(|b| b.name.clone());
+
+        for branch in &self.branches {
+            let kind = match branch.kind {
+                BranchType::Local => CommitRefKind::Local,
+                BranchType::Remote => CommitRefKind::Remote,
+            };
+            self.refs_by_commit.entry(branch.head).or_default().push(CommitRef {
+                name: branch.name.clone().into(),
+                kind,
+                is_current: current.as_deref() == Some(branch.name.as_str()),
+            });
+        }
+        for tag in &self.tags {
+            self.refs_by_commit.entry(tag.target).or_default().push(CommitRef {
+                name: tag.name.clone().into(),
+                kind: CommitRefKind::Tag,
+                is_current: false,
+            });
+        }
+        for refs in self.refs_by_commit.values_mut() {
+            refs.sort_by_key(|r| match r.kind {
+                CommitRefKind::Local => 0,
+                CommitRefKind::Tag => 1,
+                CommitRefKind::Remote => 2,
+            });
+        }
+    }
+
+    /// Click on a branch: scroll the commit log to its tip commit. The log
+    /// covers every ref, so tips are normally in it; an older-than-window
+    /// tip (beyond `MAX_LOG_COMMITS`) surfaces an info message instead.
+    pub(crate) fn reveal_branch(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(tip) = self.branches.iter().find(|b| b.name == name).map(|b| b.head) else {
+            return;
+        };
+        match self.log.iter().position(|c| c.id == tip) {
+            Some(ix) => {
+                self.log_scroll.scroll_to_item(ix, ScrollStrategy::Center);
+                cx.notify();
+            }
+            None => {
+                self.info = Some(
+                    format!("\"{name}\" tip is older than the {MAX_LOG_COMMITS} commits shown")
+                        .into(),
+                );
+                cx.notify();
+            }
+        }
+    }
+
+    /// Run a remote operation through the git binary on the background
+    /// thread (network + credentials), then refresh the UI.
+    pub(crate) fn run_git_remote(
+        &mut self,
+        label: &'static str,
+        args: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        let Some(repo) = self.repo.clone() else { return };
+
+        self.remote_busy = Some(label);
+        self.info = None;
+        self.error = None;
+        cx.notify();
+
+        let job = cx.background_spawn(async move { repo.run_git(&args) });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                this.remote_busy = None;
+                match &result {
+                    Ok(out) => {
+                        this.info = Some(if out.is_empty() {
+                            format!("{label}: ok").into()
+                        } else {
+                            format!("{label}: {out}").into()
+                        });
+                        this.refresh(cx);
+                    }
+                    Err(e) => {
+                        this.error = Some(e.to_string().into());
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Run a short sequence of git commands on the background thread,
+    /// stopping at the first failure; refreshes the UI afterwards either
+    /// way (a failed step often leaves repo state worth showing).
+    pub(crate) fn run_git_steps(
+        &mut self,
+        label: &'static str,
+        steps: Vec<Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        let Some(repo) = self.repo.clone() else { return };
+
+        self.remote_busy = Some(label);
+        self.info = None;
+        self.error = None;
+        cx.notify();
+
+        let job = cx.background_spawn(async move {
+            let mut out = String::new();
+            for step in &steps {
+                let text = repo.run_git(step)?;
+                out.push_str(&text);
+            }
+            Ok(out) as Result<String, grit_core::error::Error>
+        });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                this.remote_busy = None;
+                match &result {
+                    Ok(out) => {
+                        this.info = Some(if out.is_empty() {
+                            format!("{label}: ok").into()
+                        } else {
+                            format!("{label}: {out}").into()
+                        });
+                        this.refresh(cx);
+                    }
+                    Err(e) => {
+                        this.error = Some(e.to_string().into());
+                        this.refresh(cx);
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Shared completion handling for launcher jobs: busy flag + status bar
+    /// message (error surfaces the failed command), no repo refresh.
+    pub(crate) fn run_launcher(
+        &mut self,
+        label: &'static str,
+        job: Task<Result<(), String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.remote_busy.is_some() {
+            return;
+        }
+        self.remote_busy = Some(label);
+        self.info = None;
+        self.error = None;
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                this.remote_busy = None;
+                match result {
+                    Ok(()) => {
+                        this.info = Some(format!("{label}: ok").into());
+                        cx.notify();
+                    }
+                    Err(e) => {
+                        this.error = Some(e.into());
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn show_diff_panel(&mut self, cx: &mut Context<Self>) {
+        // First open of the panel in this session: while the panel was
+        // hidden, the layout state adopted the history panel at the whole
+        // container height. Restart its panel record so the opening frame
+        // adopts [history, diff] consistently instead of rescaling the
+        // stale record (which would shrink the fresh default size).
+        if !self.diff_open {
+            self.diff_open = true;
+            self.center_layout.update(cx, |state, _| state.clear());
+        }
+    }
+
+    pub(crate) fn hide_diff_panel(&mut self) {
+        if self.diff_open {
+            self.diff_open = false;
+        }
+    }
+
+    /// Install a freshly produced patch in the diff viewer.
+    pub(crate) fn set_diff(&mut self, result: grit_core::Result<String>, cx: &mut Context<Self>) {
+        match result {
+            Ok(patch) => match DiffFile::parse(&patch) {
+                Ok(files) => self.diff.update(cx, |state, cx| state.set_files(files, cx)),
+                Err(e) => self.error = Some(e.to_string().into()),
+            },
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                self.clear_diff(cx);
+            }
+        };
+        cx.notify();
+    }
+
+    /// Show the empty diff viewer (no file selected).
+    pub(crate) fn clear_diff(&mut self, cx: &mut Context<Self>) {
+        self.diff.update(cx, |state, cx| state.set_files([], cx));
+    }
+
+    /// Toggle the diff viewer between unified and side-by-side layout.
+    pub(crate) fn toggle_diff_mode(&mut self, cx: &mut Context<Self>) {
+        self.diff.update(cx, |state, cx| {
+            let next =
+                if state.mode() == DiffMode::Split { DiffMode::Unified } else { DiffMode::Split };
+            state.set_mode(next, cx);
+        });
+    }
+}
