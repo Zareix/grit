@@ -14,7 +14,7 @@ anyhow = "1"
 thiserror = "2"
 
 # UI
-gpui-kit = "0.7.1"
+gpui-kit = "0.7.3"
 
 # session persistence
 serde = { version = "1", features = ["derive"] }
@@ -30,17 +30,4 @@ opt-level = 2
 [profile.release]
 lto = "thin"
 codegen-units = 1
-
-# gpui-kit 0.7.1 on crates.io predates the `diff` component (unified/split diff
-# display with line numbers, tree-sitter syntax highlighting and change
-# backgrounds). The published component therefore gets patched to the git main
-# checkout, pinned to the revision the app was integrated against. Everything
-# from the `gpui-pre-*` GPUI snapshot pins (=0.3.8) still lines up between the
-# two sources.
-[patch.crates-io]
-gpui-kit = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
-gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
-gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
-gpui-component-macros = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
-gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
 

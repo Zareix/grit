@@ -64,7 +64,11 @@ just check       # fast cargo check
 - `Repository::commit` parents are `&[&Commit]`, not `&[&Object]`.
 - Untracked content in workdir diffs needs `opts.show_untracked_content(true)`.
 
-## GPUI Kit 0.7.1 gotchas (component sources live in `~/.cargo/registry/.../gpui-component-0.7.1`)
+## GPUI Kit 0.7.3 gotchas (component sources live in `~/.cargo/registry/.../gpui-component-0.7.3`)
+
+The app tracks the **published crates.io release** (`gpui-kit = "0.7.3"` in the
+root `Cargo.toml`) — no `[patch.crates-io]` git pins anymore; the diff
+component ships in the published `gpui-component` since 0.7.2.
 
 - Lists that must scroll smoothly use gpui's `uniform_list(id, item_count,
   closure)` (exported via `gpui_kit::*`) — a plain scrollable `div` full of
@@ -74,7 +78,7 @@ just check       # fast cargo check
   contiguously with uniform height (no gap support). Item width is
   content-based (`ListHorizontalSizingBehavior::FitList` by default) — add
   `.w_full()` on each row so it fills the list and `flex_1` works.
-- Menus (0.7.1): the `PopupMenu` is **provided** by the builder closure
+- Menus: the `PopupMenu` is **provided** by the builder closure
   (`dropdown_menu(move |menu, _, _| …)`) — do not construct one; the site docs
   show a `PopupMenu::new` that does not exist publicly. Items: prefer
   `menu.item(PopupMenuItem::new(label).icon(…).disabled(…).on_click(|ev, window, cx| …))`
@@ -84,19 +88,21 @@ just check       # fast cargo check
   return type). Hover-reveal buttons: `.group("row")` on the container +
   `.opacity(0.).group_hover("row", |s| s.opacity(1.))` on the trigger.
 - **Never invent APIs** — check the installed crate source; the
-  `.agents/skills/gpui-kit` catalog describes a newer ecosystem than 0.7.1
-  (e.g. the `Diff` component does not exist in 0.7.1; `h_resizable(id)` takes
-  no state argument — attach it with `.with_state(&Entity<ResizableState>)`).
+  `.agents/skills/gpui-kit` catalog may describe a newer ecosystem
+  (`h_resizable(id)` takes no state argument — attach it with
+  `.with_state(&Entity<ResizableState>)`). The `Diff` component exists in the
+  published 0.7.3 (`gpui_kit::component::diff`: `DiffFile::parse`,
+  `DiffState`, `DiffMode`).
 - `ResizablePanelGroup` always renders `size_full()` (both axes, not with
   Styled) — it must live inside a constrained wrapper
   (`div().flex_1().min_h_0().child(group)`), otherwise it overflows the
   toolbar/status bar and pushes the whole content down. Give panels a
   `.size(px(...))` + `.size_range(min..)` or a content-tall panel (a big
   diff) grows beyond the window.
-- Dialogs (0.7.1): `window.open_dialog(cx, move |dialog, window, dialog_cx| …)`
+- Dialogs: `window.open_dialog(cx, move |dialog, window, dialog_cx| …)`
   — real signature is `(cx, build)`, the builder closure is `move` and you
   **must name its params**: the site docs (all versions) show
-  `footer(|…| vec![Button])` as a closure factory, but 0.7.1 source takes
+  `footer(|…| vec![Button])` as a closure factory, but 0.7.3 source takes
   `footer(impl IntoElement)` and never renders `button_props` buttons (that's
   AlertDialog-only). Build the footer yourself:
   `DialogFooter::new().child(Button…)` + `window.close_dialog(cx)`.
@@ -125,8 +131,7 @@ just check       # fast cargo check
   and hides empty sections — do not duplicate titles in the surrounding panel.
 - `InputState::value()` reads text; `set_value(value, window, cx)` clears it.
 - `cx.theme()` returns the full `Theme`: colors (`success`, `danger`, `info`,
-  `primary`, `muted_foreground`, …) **and** `mono_font_family`. There is no
-  plain `warning` token in 0.7.1.
+  `warning`, `primary`, `muted_foreground`, …) **and** `mono_font_family`.
 
 ## Conventions
 
