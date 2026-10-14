@@ -5,9 +5,13 @@
 //! delete; the same menu is available on right-click (context menu).
 //! Remotes render as a GitKraken-style tree (one root per remote, a folder
 //! per `/` segment) whose leaves offer checkout (as a tracking local
-//! branch) and delete on the server, via right-click.
+//! branch) and delete on the server, via right-click. See
+//! [`remote_tree`] and [`stashes`] for those two panels.
 
-use std::collections::{BTreeMap, HashSet};
+mod remote_tree;
+mod stashes;
+
+pub(crate) use remote_tree::{prune_collapsed, remote_branch_menu, remote_tree_items};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -15,20 +19,16 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
-    list::ListItem,
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
-    resizable_panel,
-    tree::{TreeItem, tree},
-    v_flex, v_resizable,
+    resizable_panel, v_flex, v_resizable,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use grit_core::branch::{Branch, BranchType, full_ref};
-use grit_core::{Oid, Stash};
+use grit_core::{Oid, remote::RemoteOp};
 
 use super::primitives::SectionLabel;
 use crate::workspace::{BranchOp, Workspace};
-use grit_core::remote::RemoteOp;
 
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let muted = cx.theme().muted_foreground;
@@ -112,7 +112,7 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                                 .flex_1()
                                 .min_h_0()
                                 .child(div().px_1().child(SectionLabel::new("REMOTES", cx)))
-                                .child(render_remote_tree(ws, cx)),
+                                .child(remote_tree::render_remote_tree(ws, cx)),
                         ),
                     )
                     .child(
@@ -120,207 +120,10 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                             .size(px(120.))
                             .size_range(px(40.)..px(320.))
                             .visible(!ws.stashes.is_empty())
-                            .child(render_stashes(ws, cx)),
+                            .child(stashes::render_stashes(ws, cx)),
                     ),
             ),
         )
-}
-
-// ---- remote tree --------------------------------------------------------
-
-/// Synthetic root/field ids follow `remote:<remote>` and
-/// `remote:<remote>/<segment>`; leaf ids are the full branch name, used by
-/// the context menu and log reveal.
-const ROOT_PREFIX: &str = "remote:";
-
-/// GitKraken-style remote tree items: one root per remote, a folder per
-/// intermediate `/` segment, and a leaf per branch tip.
-pub(crate) fn remote_tree_items(ws: &Workspace) -> Vec<TreeItem> {
-    let mut remotes: BTreeMap<String, RemoteNode> = BTreeMap::new();
-    for branch in &ws.branches {
-        if branch.kind != BranchType::Remote {
-            continue;
-        }
-        let Some((remote, short)) = branch.name.split_once('/') else {
-            continue;
-        };
-        let segments: Vec<&str> = short.split('/').collect();
-        insert_node(remotes.entry(remote.to_owned()).or_default(), &segments, &branch.name);
-    }
-
-    remotes
-        .into_iter()
-        .map(|(remote, node)| {
-            let id = format!("{ROOT_PREFIX}{remote}");
-            TreeItem::new(id.clone(), remote)
-                .expanded(!ws.remote_collapsed.contains(&id))
-                .children(node.build(&id, &ws.remote_collapsed))
-        })
-        .collect()
-}
-
-/// A remote's branch-name hierarchy: one node per folder segment, leaves
-/// collected in `branches`.
-#[derive(Default)]
-struct RemoteNode {
-    folders: BTreeMap<String, RemoteNode>,
-    branches: Vec<String>,
-}
-
-/// Pack one branch's `/` segments into folders (all but the last); the leaf
-/// keeps the full branch name for actions.
-fn insert_node(node: &mut RemoteNode, segments: &[&str], full: &str) {
-    match segments {
-        [_leaf] => node.branches.push(full.to_owned()),
-        [name, rest @ ..] => {
-            insert_node(node.folders.entry((*name).to_owned()).or_default(), rest, full)
-        }
-        [] => {}
-    }
-}
-
-impl RemoteNode {
-    /// Folders first (like the GitKraken panel), sorted; leaves last. Root /
-    /// folder ids are synthetic and reusable for the collapse records;
-    /// leaf ids are the full branch name.
-    fn build(self, id_prefix: &str, collapsed: &HashSet<String>) -> Vec<TreeItem> {
-        let mut items: Vec<TreeItem> = self
-            .branches
-            .into_iter()
-            .map(|full| {
-                let label = full.rsplit('/').next().unwrap_or(&full).to_owned();
-                TreeItem::new(full.clone(), label)
-            })
-            .collect();
-        for (name, child) in self.folders {
-            let id = format!("{id_prefix}/{name}");
-            items.push(
-                TreeItem::new(id.clone(), name)
-                    .expanded(!collapsed.contains(&id))
-                    .children(child.build(&id, collapsed)),
-            );
-        }
-        items
-    }
-}
-
-/// Drop collapse records for tree items that no longer exist, so the set
-/// does not grow stale as branches come and go.
-pub(crate) fn prune_collapsed<'a>(
-    items: impl Iterator<Item = &'a TreeItem>,
-    collapsed: &mut HashSet<String>,
-) {
-    fn walk(item: &TreeItem, collapsed: &mut HashSet<String>) {
-        collapsed.remove(item.id.as_ref());
-        for child in &item.children {
-            walk(child, collapsed);
-        }
-    }
-    items.for_each(|item| walk(item, collapsed));
-}
-
-/// The remote tree itself: virtualized, folders expand/collapse in place,
-/// leaf clicks reveal the branch in the log, right-click opens the leaf menu.
-fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
-    let workspace = cx.entity().downgrade();
-    let workspace_for_menu = workspace.clone();
-
-    let tree = tree(&ws.remote_tree, move |ix, entry, _, _, cx| {
-        let foreground = cx.theme().foreground;
-        let muted = cx.theme().muted_foreground;
-        let is_folder = entry.is_folder();
-        let depth = entry.depth();
-        let id = entry.item().id.clone();
-        let label = entry.item().label.clone();
-
-        let (icon, color) = if depth == 0 {
-            (IconName::Cloud, foreground)
-        } else if is_folder {
-            let icon = if entry.is_expanded() { IconName::FolderOpen } else { IconName::Folder };
-            (icon, muted)
-        } else {
-            (IconName::GitBranch, muted)
-        };
-
-        let mut item = ListItem::new(ix)
-            .w_full()
-            .min_w_0()
-            .rounded_sm()
-            .text_size(px(12.))
-            .py_0p5()
-            .pl(px(16.) * depth as f32 + px(4.))
-            .text_color(color)
-            .child(
-                h_flex()
-                    .min_w_0()
-                    .gap_1p5()
-                    .child(Icon::new(icon).size_3().text_color(color))
-                    .child(div().min_w_0().truncate().child(label)),
-            );
-
-        // Folders expand/collapse through the tree itself; leaves reveal.
-        if !is_folder {
-            item = item.on_click({
-                let workspace = workspace.clone();
-                let name = id.clone();
-                move |_, _, cx| {
-                    workspace.update(cx, |ws, cx| ws.reveal_branch(&name, cx)).ok();
-                }
-            });
-        }
-        item
-    })
-    // Only leaves act; the empty menu never opens for folders.
-    .context_menu(move |_ix, entry, menu, _, cx| {
-        if entry.is_folder() {
-            return menu;
-        }
-        let name = entry.item().id.to_string();
-        remote_branch_menu(menu, &name, &workspace_for_menu, cx)
-    });
-
-    div().flex_1().min_h_0().px_1().child(tree)
-}
-
-/// Leaf menu: checkout as a local tracking branch, fast-forward / merge
-/// moves coherent with the remote tip, and delete the branch on its server.
-pub(crate) fn remote_branch_menu(
-    mut menu: PopupMenu,
-    name: &str,
-    workspace: &WeakEntity<Workspace>,
-    cx: &mut App,
-) -> PopupMenu {
-    // Checkout
-    menu = menu.item(PopupMenuItem::new("Checkout").icon(IconName::GitBranch).on_click({
-        let workspace = workspace.clone();
-        let name = name.to_owned();
-        move |_, window, cx| {
-            workspace.update(cx, |ws, cx| ws.checkout_remote_branch(&name, window, cx)).ok();
-        }
-    }));
-
-    menu = menu.separator();
-
-    // Integration moves relative to this remote tip (fast-forward of the
-    // checked-out branch onto it, merge into checked-out branch).
-    if let Some(entity) = workspace.upgrade() {
-        let subject = entity.read(cx).branches.iter().find(|b| b.name == name).cloned();
-        if let Some(subject) = subject {
-            menu = integration_items(menu, &subject, workspace, cx);
-            menu = menu.separator();
-        }
-    }
-
-    // Delete (removes the branch from the remote server)
-    menu = menu.item(PopupMenuItem::new("Delete").icon(IconName::Trash).on_click({
-        let workspace = workspace.clone();
-        let name = name.to_owned();
-        move |_, _, cx| {
-            workspace.update(cx, |ws, cx| ws.delete_remote_branch(&name, cx)).ok();
-        }
-    }));
-
-    menu
 }
 
 // ---- local branches -----------------------------------------------------
@@ -677,113 +480,4 @@ fn local_branch_row(
 ) -> gpui_kit::AnyElement {
     let is_current = ws.current_branch.as_ref().is_some_and(|c| c.name == branch.name);
     branch_row_shell(branch, cx, cx.theme().foreground, is_current)
-}
-
-// ---- stashes -------------------------------------------------------------
-
-/// The stash panel, styled like the staging column's sections: fixed header
-/// (title + count + collapse toggle) and stashes as single-line rows.
-fn render_stashes(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
-    let muted = cx.theme().muted_foreground;
-    let workspace = cx.entity().downgrade();
-    let count = ws.stashes.len();
-
-    v_flex()
-        .w_full()
-        .h_full()
-        .flex_none()
-        // header, always visible (collapsible through the chevron)
-        .child(
-            h_flex()
-                .px_2()
-                .py_1()
-                .gap_2()
-                .items_center()
-                .justify_between()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(muted)
-                .child(h_flex().gap_2().child("Stashes").child(format!("{count}")))
-                .child(
-                    Button::new("toggle-stashes")
-                        .ghost()
-                        .xsmall()
-                        .icon(if ws.stashes_collapsed {
-                            IconName::ChevronUp
-                        } else {
-                            IconName::ChevronDown
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_stashes_collapsed(cx))),
-                ),
-        )
-        // rows
-        .child(v_flex().flex_1().min_h_0().id("stash-list").overflow_y_scroll().pb_1().children(
-            if ws.stashes_collapsed {
-                Vec::new()
-            } else {
-                ws.stashes
-                    .iter()
-                    .map(|stash| stash_row(stash, workspace.clone(), cx))
-                    .collect::<Vec<_>>()
-            },
-        ))
-}
-
-/// One stash entry line: archive icon + message, actions on right-click.
-fn stash_row(
-    stash: &Stash,
-    workspace: WeakEntity<Workspace>,
-    cx: &mut Context<Workspace>,
-) -> gpui_kit::AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let border = cx.theme().border;
-    let foreground = cx.theme().foreground;
-    let message = stash.message.clone();
-    let index = stash.index;
-
-    div()
-        .id(SharedString::from(format!("stash-{index}")))
-        .w_full()
-        .h_7()
-        .px_2()
-        .flex()
-        .items_center()
-        .gap_1p5()
-        .rounded_sm()
-        .cursor_pointer()
-        .hover(|style| style.bg(border.opacity(0.4)))
-        .child(Icon::new(IconName::Archive).size_3().text_color(muted))
-        .child(div().min_w_0().truncate().text_size(px(12.)).text_color(foreground).child(message))
-        .context_menu(move |menu, _, cx| stash_menu(menu, index, &workspace, cx))
-        .into_any_element()
-}
-
-/// Right-click actions on a stash entry: reapply (keeping or taking it out
-/// of the list) and drop (confirm dialog).
-fn stash_menu(
-    mut menu: PopupMenu,
-    index: usize,
-    workspace: &WeakEntity<Workspace>,
-    _cx: &mut App,
-) -> PopupMenu {
-    menu = menu.item(PopupMenuItem::new("Apply").icon(IconName::RotateCcw).on_click({
-        let workspace = workspace.clone();
-        move |_, _, cx| {
-            workspace.update(cx, |ws, cx| ws.apply_stash(index, cx)).ok();
-        }
-    }));
-    menu = menu.item(PopupMenuItem::new("Pop").icon(IconName::ArrowDown).on_click({
-        let workspace = workspace.clone();
-        move |_, _, cx| {
-            workspace.update(cx, |ws, cx| ws.pop_stash(index, cx)).ok();
-        }
-    }));
-    menu = menu.separator();
-    menu = menu.item(PopupMenuItem::new("Drop").icon(IconName::Trash).on_click({
-        let workspace = workspace.clone();
-        move |_, window, cx| {
-            workspace.update(cx, |ws, cx| ws.open_stash_drop_dialog(index, window, cx)).ok();
-        }
-    }));
-    menu
 }
