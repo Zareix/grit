@@ -411,11 +411,16 @@ fn hdiutil_attach(dmg: &Path) -> Result<PathBuf, String> {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
         return Err(format!("hdiutil attach: {stderr}"));
     }
+    // The plist is indented: the value's `<string>` tag sits on its own
+    // line after the key, so match key then the following string value.
     let plist = String::from_utf8_lossy(&out.stdout);
     plist
-        .split("<key>mount-point</key><string>")
-        .nth(1)
-        .and_then(|rest| rest.split("</string>").next())
+        .split_once("<key>mount-point</key>")
+        .and_then(|(_, rest)| {
+            let start = rest.find("<string>")? + "<string>".len();
+            let end = start + rest[start..].find("</string>")?;
+            Some(&rest[start..end])
+        })
         .map(|mount| PathBuf::from(mount.trim()))
         .ok_or_else(|| "hdiutil attach reported no mount point".into())
 }

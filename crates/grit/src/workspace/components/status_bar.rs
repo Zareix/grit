@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use gpui_kit::component::{
-    ActiveTheme as _,
+    ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     hover_card::HoverCard,
@@ -59,6 +59,7 @@ fn update_widget(ws: &Workspace, cx: &mut Context<Workspace>) -> Option<AnyEleme
         UpdateState::Available(_) => Button::new("update-available")
             .label("Update available")
             .primary()
+            .xsmall()
             .on_click(move |_, window, cx| {
                 weak.update(cx, |ws, cx| ws.open_update_dialog(window, cx)).ok();
             })
@@ -66,6 +67,7 @@ fn update_widget(ws: &Workspace, cx: &mut Context<Workspace>) -> Option<AnyEleme
         UpdateState::ReadyToRestart => Button::new("restart-to-update")
             .label("Restart to update")
             .primary()
+            .xsmall()
             .on_click(move |_, window, cx| {
                 weak.update(cx, |ws, cx| ws.open_restart_dialog(window, cx)).ok();
             })
