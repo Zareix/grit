@@ -47,6 +47,23 @@ impl Repo {
         Ok(parent_commit)
     }
 
+    /// Replace the HEAD commit with a new one carrying the staged index and
+    /// the given message (`git commit --amend -m`). author is left untouched
+    /// (unchanged original authorship), committer refreshed. Only valid
+    /// while a branch is checked out (not unborn / detached HEAD).
+    pub fn commit_amend(&self, message: &str) -> Result<Oid> {
+        let repo = self.git2()?;
+        let signature = self.signature(&repo)?;
+        let mut index = repo.index()?;
+
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        index.write()?;
+
+        let head = repo.head()?.peel_to_commit()?;
+        Ok(head.amend(Some("HEAD"), None, Some(&signature), None, Some(message), Some(&tree))?)
+    }
+
     /// Look up a commit by oid.
     pub fn find_commit(&self, id: Oid) -> Result<Commit> {
         let repo = self.git2()?;

@@ -110,6 +110,9 @@ pub struct Workspace {
     message: Entity<InputState>,
     /// Inline "new branch" input, toggled by the + button.
     branch_input: Entity<InputState>,
+    /// Whether the next commit amends HEAD (`--amend`): message prefilled
+    /// with the last commit's, button becomes "Amend".
+    amend: bool,
     creating_branch: bool,
     /// Name input of the shared "create here" dialog (branch / tag at a
     /// commit); its Enter press confirms through `confirm_create_here`.
@@ -210,6 +213,7 @@ impl Workspace {
             message,
             branch_input,
             creating_branch: false,
+            amend: false,
             name_input,
             pending_create: None,
             selected_path: None,

@@ -445,8 +445,17 @@ impl Workspace {
             return;
         }
 
-        match repo.commit(&message) {
-            Ok(_) => {
+        let result = if self.amend {
+            repo.commit_amend(&message).map(|_| ())
+        } else {
+            repo.commit(&message).map(|_| ())
+        };
+
+        match result {
+            Ok(()) => {
+                // The amend is done: back to plain-commit mode and empty
+                // message box.
+                self.amend = false;
                 self.message.update(cx, |state, cx| state.set_value("", window, cx));
                 self.refresh(cx);
             }
@@ -455,6 +464,21 @@ impl Workspace {
                 cx.notify();
             }
         }
+    }
+
+    /// Toggle the "Amend" checkbox: turning it on prefills the message box
+    /// with the HEAD commit's message, turning it off empties it. Only
+    /// meaningful when a branch (and thus a HEAD commit) exists.
+    pub(crate) fn toggle_amend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.amend = !self.amend;
+        let message = if self.amend {
+            let Some(repo) = self.repo.clone() else { return };
+            repo.head_commit().ok().flatten().and_then(|c| c.message.clone()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        self.message.update(cx, |state, cx| state.set_value(message.as_str(), window, cx));
+        cx.notify();
     }
 
     pub(crate) fn checkout_branch(&mut self, name: &str, cx: &mut Context<Self>) {
