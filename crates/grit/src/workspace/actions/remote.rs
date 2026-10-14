@@ -16,7 +16,9 @@ use crate::workspace::{BranchOp, Workspace};
 
 impl Workspace {
     /// Push; opens the set-upstream dialog when the current branch does not
-    /// track a remote yet.
+    /// track a remote yet, and the diverged-branch dialog when the upstream
+    /// tip has commits the branch does not have (the push would be
+    /// rejected as non-fast-forward).
     pub(crate) fn push(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.remote_busy.is_some() {
             return;
@@ -35,7 +37,110 @@ impl Workspace {
             return;
         }
 
+        // Divergence check against the upstream tip, from the branch
+        // relations filled by the last refresh; when the upstream tip is
+        // unknown (no fetch yet) the plain push runs and git reports its
+        // own rejection in the status bar.
+        let diverged = self
+            .branches
+            .iter()
+            .find(|b| b.name == branch.upstream.as_deref().unwrap_or_default())
+            .and_then(|up| {
+                self.branch_relations.get(&branch.head).and_then(|row| row.get(&up.head)).copied()
+            })
+            .is_some_and(|(ahead, behind)| ahead > 0 && behind > 0);
+        if diverged {
+            self.open_diverged_push_dialog(&branch.name, window, cx);
+            return;
+        }
+
         self.run_remote(RemoteOp::Push, cx);
+    }
+
+    /// GitKraken-style diverged-branch dialog: the push would be rejected,
+    /// so the choice is Cancel, a Pull (fast-forward when possible) to
+    /// update the branch, or a Force Push that overwrites the remote tip.
+    pub(crate) fn open_diverged_push_dialog(
+        &mut self,
+        branch_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let upstream_name = self
+            .current_branch
+            .as_ref()
+            .and_then(|b| b.upstream.clone())
+            .unwrap_or_else(|| "upstream".into());
+        // Ahead/behind counts for the dialog text; defaults keep the
+        // message honest when the counts could not be read.
+        let (ahead, behind) = self
+            .current_branch
+            .as_ref()
+            .and_then(|b| {
+                let up = self
+                    .branches
+                    .iter()
+                    .find(|up| Some(up.name.as_str()) == b.upstream.as_deref())?;
+                self.branch_relations.get(&b.head)?.get(&up.head).copied()
+            })
+            .unwrap_or((0, 0));
+        let branch_name = branch_name.to_string();
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, dialog_cx| {
+            dialog
+                .title("Branches diverged")
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(format!(
+                            "\"{branch_name}\" and \"{upstream_name}\" have diverged: \
+                             {ahead} commit(s) ahead, {behind} behind."
+                        ))
+                        .child(
+                            div()
+                                .text_color(dialog_cx.theme().muted_foreground)
+                                .child("Update your branch by doing a Pull."),
+                        ),
+                )
+                .footer(
+                    DialogFooter::new()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(Button::new("force-push").danger().label("Force Push").on_click({
+                            let weak = weak.clone();
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                                weak.update(cx, |ws, cx| ws.force_push(cx)).ok();
+                            }
+                        }))
+                        .child(
+                            Button::new("pull")
+                                .success()
+                                .label("Pull (fast-forward if possible)")
+                                .on_click({
+                                    let weak = weak.clone();
+                                    move |_, window, cx| {
+                                        window.close_dialog(cx);
+                                        weak.update(cx, |ws, cx| ws.run_remote(RemoteOp::Pull, cx))
+                                            .ok();
+                                    }
+                                }),
+                        ),
+                )
+        });
+    }
+
+    /// Created by the diverged-branch dialog: force-push the current branch
+    /// to its upstream, overwriting the remote tip. `--force-with-lease`
+    /// instead of a bare `--force` so a remote tip that moved after the
+    /// last fetch is not silently overwritten.
+    pub(crate) fn force_push(&mut self, cx: &mut Context<Self>) {
+        let args = vec!["push".to_string(), "--force-with-lease".to_string()];
+        self.run_git_remote("push", args, cx);
     }
 
     /// Dialog asking to publish a branch as `<remote>/<branch>` and set it as
