@@ -183,6 +183,13 @@ pub struct Workspace {
     branches: Vec<Branch>,
     current_branch: Option<Branch>,
     tags: Vec<Tag>,
+    /// Tag names published on the default remote (origin-first), read by
+    /// a background `ls-remote`; `None` = not known yet. Drives the
+    /// "already on the remote" marker and the disabled `Push tag`.
+    remote_tags: Option<HashSet<String>>,
+    /// When the last remote-tags lookup was attempted; a failed attempt
+    /// (offline) retries at most once a minute, silently.
+    remote_tags_attempt: Option<std::time::Instant>,
     /// Stash entries (`git stash list`), shown in the branches column's
     /// bottom panel.
     stashes: Vec<Stash>,
@@ -291,6 +298,8 @@ impl Workspace {
             branches: Vec::new(),
             current_branch: None,
             tags: Vec::new(),
+            remote_tags: None,
+            remote_tags_attempt: None,
             stashes: Vec::new(),
             stashes_collapsed: false,
             remote_tree,

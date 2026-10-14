@@ -57,6 +57,25 @@ impl Repo {
         Ok(text)
     }
 
+    /// Tag names published on `remote` (`git ls-remote --tags`, called
+    /// from a background thread). Annotated tags list twice in the
+    /// output — the object line and its peeled `^{}` duplicate; the peel
+    /// lines are skipped.
+    pub fn remote_tags(&self, remote: &str) -> Result<Vec<String>> {
+        let out =
+            self.run_git(&["ls-remote".to_string(), "--tags".to_string(), remote.to_string()])?;
+        let mut names = Vec::new();
+        for line in out.lines() {
+            let Some((_, name)) = line.split_once('\t') else { continue };
+            let Some(tag) = name.strip_prefix("refs/tags/") else { continue };
+            if tag.ends_with("^{}") {
+                continue;
+            }
+            names.push(tag.to_owned());
+        }
+        Ok(names)
+    }
+
     /// Configured remote names, ordered (`origin` first).
     pub fn remotes(&self) -> Result<Vec<String>> {
         let repo = self.git2()?;

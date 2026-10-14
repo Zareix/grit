@@ -135,6 +135,13 @@ fn ref_menu(
             }
         }
         CommitRefKind::Remote => remote_branch_menu(menu, &r.name, workspace, cx),
-        CommitRefKind::Tag => tag_menu(menu, &r.name, workspace, cx),
+        CommitRefKind::Tag => {
+            let on_remote = entity
+                .read(cx)
+                .remote_tags
+                .as_ref()
+                .is_some_and(|known| known.contains(r.name.as_str()));
+            tag_menu(menu, &r.name, on_remote, workspace, cx)
+        }
     }
 }

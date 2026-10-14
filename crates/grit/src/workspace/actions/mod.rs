@@ -134,6 +134,7 @@ impl Workspace {
         self.rebuild_refs();
         self.prune_selection();
         self.sync_remote_tree(cx);
+        self.sync_remote_tags(cx);
         self.error = None;
         if let Some(repo) = self.repo.clone() {
             self.sync_selection(&repo, cx);

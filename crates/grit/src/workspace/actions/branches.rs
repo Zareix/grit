@@ -2,6 +2,7 @@
 //! branch checkout, inline branch creation, deletion, and the
 //! create-branch / create-tag "here" dialogs' confirm side.
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui_kit::component::{
@@ -110,6 +111,8 @@ impl Workspace {
     /// Push a tag to the first configured remote (`git push <remote>`
     /// <tag>`; origin wins when several are configured). The release is
     /// published through the same credential story as branch pushes.
+    /// The remote-tags cache is dropped so the completion refresh
+    /// re-learns what the remote holds.
     pub(crate) fn push_tag(&mut self, name: &str, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.as_ref() else { return };
         let remote = match repo.remotes() {
@@ -125,6 +128,8 @@ impl Workspace {
             cx.notify();
             return;
         };
+        self.remote_tags = None;
+        self.remote_tags_attempt = None;
         let args = vec!["push".to_string(), remote, name.to_string()];
         self.run_git_remote("push tag", args, cx);
     }
@@ -132,7 +137,8 @@ impl Workspace {
     /// Delete-tag dialog action: the remote copy goes first (`git push
     /// <remote> :refs/tags/<name>`) when a remote is configured, then the
     /// local ref leaves (`git tag -d`) — so a later fetch cannot
-    /// resurrect the tag. Without a remote only the local ref goes.
+    /// resurrect the tag. Without a remote only the local ref goes. The
+    /// remote-tags cache is dropped so the completion refresh re-learns.
     pub(crate) fn delete_tag_everywhere(&mut self, name: &str, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.as_ref() else { return };
         let mut steps = Vec::new();
@@ -153,7 +159,49 @@ impl Workspace {
             }
         }
         steps.push(vec!["tag".to_string(), "-d".to_string(), name.to_string()]);
+        self.remote_tags = None;
+        self.remote_tags_attempt = None;
         self.run_git_steps("delete tag", steps, cx);
+    }
+
+    /// Learn which tags already sit on the default remote, on a background
+    /// `ls-remote`. Runs when the knowledge is missing (workspace open, or
+    /// after a push/delete invalidated it) and at most once a minute
+    /// afterwards on refreshes while offline — silent on failure so the
+    /// app stays usable.
+    pub(crate) fn sync_remote_tags(&mut self, cx: &mut Context<Self>) {
+        if self.remote_tags.is_some() {
+            return;
+        }
+        if let Some(attempt) = self.remote_tags_attempt
+            && attempt.elapsed() < std::time::Duration::from_secs(60)
+        {
+            return;
+        }
+        let Some(repo) = self.repo.clone() else { return };
+        let Ok(remotes) = repo.remotes() else { return };
+        let Some(remote) = remotes.first().cloned() else {
+            // No remote configured: nothing can be published anywhere.
+            self.remote_tags = Some(HashSet::new());
+            cx.notify();
+            return;
+        };
+        self.remote_tags_attempt = Some(std::time::Instant::now());
+
+        let job = cx.background_spawn(async move {
+            repo.remote_tags(&remote).map(|tags| tags.into_iter().collect::<HashSet<_>>())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                if let Ok(known) = result {
+                    this.remote_tags = Some(known);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// "Create branch here" on a commit: small input dialog naming the

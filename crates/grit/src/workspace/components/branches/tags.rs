@@ -12,6 +12,7 @@ use gpui_kit::component::{
     menu::{ContextMenuExt as _, DropdownMenu as _},
     v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use grit_core::tags::Tag;
 
@@ -51,17 +52,30 @@ pub(super) fn render_tags(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         // The rows sit in a `flex_none` wrapper inside the scroll area:
         // one fixed content block instead of N children of a flex_1
         // container, so the row pitch cannot stretch with the panel.
-        .child(v_flex().flex_1().min_h_0().id("tag-list").overflow_y_scroll().pb_1().child(
-            v_flex().flex_none().flex_col().children(
-                ws.tags.iter().map(|tag| tag_row(tag, workspace.clone(), cx)).collect::<Vec<_>>(),
+        .child(
+            v_flex().flex_1().min_h_0().id("tag-list").overflow_y_scroll().pb_1().child(
+                v_flex().flex_none().flex_col().children(
+                    ws.tags
+                        .iter()
+                        .map(|tag| {
+                            let on_remote = ws
+                                .remote_tags
+                                .as_ref()
+                                .is_some_and(|known| known.contains(tag.name.as_str()));
+                            tag_row(tag, on_remote, workspace.clone(), cx)
+                        })
+                        .collect::<Vec<_>>(),
+                ),
             ),
-        ))
+        )
 }
 
-/// One tag line: tag icon + name, actions on right-click (and through the
-/// hover-revealed menu button, like branch rows).
+/// One tag line: tag icon + name, a cloud marker when the tag is already
+/// published (remote tags are learned in the background), and actions on
+/// right-click plus the hover-revealed menu button, like branch rows.
 fn tag_row(
     tag: &Tag,
+    on_remote: bool,
     workspace: WeakEntity<Workspace>,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
@@ -89,6 +103,9 @@ fn tag_row(
             }
         })
         .child(Icon::new(IconName::Tag).size_3().text_color(cx.theme().success))
+        .when(on_remote, |this| {
+            this.child(Icon::new(IconName::Cloud).size_3().text_color(cx.theme().info.opacity(0.8)))
+        })
         .child(
             div()
                 .min_w_0()
@@ -108,12 +125,12 @@ fn tag_row(
                 .dropdown_menu({
                     let workspace = workspace.clone();
                     let name = name.clone();
-                    move |menu, _, cx| tag_menu(menu, &name, &workspace, cx)
+                    move |menu, _, cx| tag_menu(menu, &name, on_remote, &workspace, cx)
                 }),
         )
         .context_menu({
             let workspace = workspace.clone();
-            move |menu, _, cx| tag_menu(menu, &name, &workspace, cx)
+            move |menu, _, cx| tag_menu(menu, &name, on_remote, &workspace, cx)
         })
         .into_any_element()
 }

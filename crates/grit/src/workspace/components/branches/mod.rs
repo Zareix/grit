@@ -287,20 +287,24 @@ pub(crate) fn branch_menu(
 
 /// Right-click / menu-button actions on a tag: publish it, or delete it
 /// (remote copy first, then the local ref, behind a confirm dialog).
+/// `on_remote` disables the push when the remote already has the tag.
 pub(crate) fn tag_menu(
     mut menu: PopupMenu,
     name: &str,
+    on_remote: bool,
     workspace: &WeakEntity<Workspace>,
     _cx: &mut App,
 ) -> PopupMenu {
     let name: String = name.to_owned();
-    menu = menu.item(PopupMenuItem::new("Push tag").icon(IconName::Upload).on_click({
-        let workspace = workspace.clone();
-        let name = name.clone();
-        move |_, _, cx| {
-            workspace.update(cx, |ws, cx| ws.push_tag(&name, cx)).ok();
-        }
-    }));
+    menu = menu.item(
+        PopupMenuItem::new("Push tag").icon(IconName::Upload).disabled(on_remote).on_click({
+            let workspace = workspace.clone();
+            let name = name.clone();
+            move |_, _, cx| {
+                workspace.update(cx, |ws, cx| ws.push_tag(&name, cx)).ok();
+            }
+        }),
+    );
     menu.item(PopupMenuItem::new("Delete tag…").icon(IconName::Trash).on_click({
         let workspace = workspace.clone();
         move |_, window, cx| {
