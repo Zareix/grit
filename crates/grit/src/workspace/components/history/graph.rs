@@ -1,312 +1,197 @@
-//! The graph column: git's own ASCII art re-painted as lanes.
+//! The graph column: ONE overlay canvas painting the whole commit list
+//! (the Zed-proved layout — not one canvas per row).
 //!
-//! `git log --graph` computes the lane layout; we only translate its art
-//! into pixels. Every art line of a row owns a vertical *slat* of the
-//! cell (n art lines → n slats), and git's continuity guarantees the
-//! pixels line up across rows: a column is a logical lane, `\` bends one
-//! column right at the next slat boundary, swaths meet exactly.
-//!
-//! Colors come from the theme's semantic tokens, cycled by column so a
-//! lane keeps its color while it survives (no raw hex, per repo rule).
+//! The overlay reads the list's scroll offset every frame, culls edge
+//! lines whose row interval misses the viewport, and paints:
+//! 1. edges, grouped per color in their own paint layer (crossing lines
+//!    of different colors never tint each other),
+//! 2. commit nodes last: a three-fill circle (background halo, colored
+//!    ring, background hole) so they read as rings over the lanes.
+
+use std::collections::BTreeMap;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
-use grit_core::graph::GraphRow;
+use grit_core::graph::{EdgeLine, GraphData, Segment};
 
-use super::GRAPH_W;
+use crate::workspace::Workspace;
 
-/// Pixel width of one lane column (5 lanes fit in `GRAPH_W` = 96).
-const LANE_W: f32 = 18.;
-/// Node dot radius, painted on top of the passing lanes.
-const DOT_R: f32 = 3.5;
+/// Lane palette (token layer): 13 mid-tone colors that read on both
+/// appearances. Round-robin per lane column, memoized there.
+const PALETTE_HEX: [u32; 13] = [
+    0x0090ff, 0xff9d33, 0xff66c6, 0x99d52a, 0x7a5cff, 0xffb224, 0x2db398, 0xe05555, 0x2bc7bd,
+    0xccae15, 0x43a865, 0x5d68ff, 0x6a5cf0,
+];
 
-/// Does `line` carry lane `lane` crossing this slat vertically? A node
-/// or vertical at the lane's own char column, or a bend arriving at the
-/// boundary into it (`/` from the right, `\` from the left).
-fn lane_passes(line: Option<&String>, lane: usize) -> bool {
-    let Some(line) = line else { return false };
-    let chars: Vec<char> = line.chars().collect();
-    let own = lane * 2;
-    matches!(chars.get(own), Some('|') | Some('*'))
-        || chars.get(own + 1) == Some(&'/')
-        || (own > 0 && chars.get(own - 1) == Some(&'\\'))
+/// Pixel width of one lane column.
+pub(super) const LANE_W: f32 = 18.;
+
+/// The graph gutter width for a log: one slot per lane the layout ever
+/// used, clamped to [3, 8] lanes — wide enough to keep the whole main
+/// line visible in skewed topologies (rebased tips sharing a base far
+/// below), narrow enough to leave the title column room. Deeper lanes
+/// are simply cut off at the gutter edge (the overlay clips its paint).
+/// Shared by the header, every row's empty slot and the overlay.
+pub(super) fn gutter_width(graph: Option<&GraphData>) -> Pixels {
+    let lanes = graph.map_or(3, |g| g.max_lanes.clamp(3, 8));
+    px(lanes as f32 * LANE_W)
 }
 
-/// Does the NEXT slat take this lane away on a curve instead? True when
-/// a bend touches the lane on either boundary: the curve departs from the
-/// node itself and the straight stub would double it.
-fn lane_departs(line: Option<&String>, lane: usize) -> bool {
-    let Some(line) = line else { return false };
-    let chars: Vec<char> = line.chars().collect();
-    let own = lane * 2;
-    chars.get(own + 1) == Some(&'\\') || (own > 0 && chars.get(own - 1) == Some(&'/'))
-}
+/// Geometry (log rows are `h_7` = 1.75rem tall).
+const LINE_W: f32 = 2.;
+const DOT_R: f32 = 4.5;
+const DOT_HALO_W: f32 = 2.;
 
-/// The graph cell for one log row. Missing art (`None` — first frame
-/// before the snapshot lands) falls back to the plain muted dot.
-pub(super) fn graph_lane_cell(
-    row: Option<&GraphRow>,
-    prev: Option<&GraphRow>,
-    next: Option<&GraphRow>,
-    cx: &App,
-) -> AnyElement {
-    let Some(row) = row else {
-        return fallback_dot(cx).into_any_element();
-    };
-    let mut art = row.art.clone();
-    art.retain(|line| !line.is_empty());
-    if art.is_empty() {
-        return fallback_dot(cx).into_any_element();
-    }
-    let palette = lane_palette(cx);
-    let ring = cx.theme().background;
-    // Neighbour rows' art drive the node stubs: a lane that enters from
-    // nowhere (branch tip) gets no half-line above, a lane that starts
-    // here (first divergent node) gets none below.
-    let prev_art = prev.and_then(|p| {
-        let mut a = p.art.clone();
-        a.retain(|l| !l.is_empty());
-        a.into_iter().next_back()
-    });
-    let next_art = next.and_then(|n| {
-        let mut a = n.art.clone();
-        a.retain(|l| !l.is_empty());
-        a.into_iter().next_back()
-    });
+/// The overlay canvas: paint-only, no hitbox — clicks pass through to
+/// the list underneath. Anchored over the log's graph column (see
+/// `GRAPH_COL_LEFT` there), `gutter_w` wide, so lane centers align with
+/// the empty slots every row keeps.
+pub(super) fn graph_overlay(
+    workspace: &WeakEntity<Workspace>,
+    gutter_w: Pixels,
+) -> impl IntoElement {
+    let workspace = workspace.clone();
+    canvas(
+        move |_, _, _| workspace,
+        move |bounds, workspace, window, cx| {
+            let Some(entity) = workspace.upgrade() else { return };
+            let ws = entity.read(cx);
+            let Some(graph) = &ws.graph else { return };
+            let row_h = row_height(window);
+            if row_h <= px(0.) {
+                return;
+            }
+            let has_wip = usize::from(!ws.status.is_empty());
+            let lane_w = px(LANE_W);
 
-    div()
-        .flex_none()
-        .w(px(GRAPH_W))
-        .h_full()
-        .relative()
-        .child(
-            canvas(
-                move |bounds, _, _| {
-                    (bounds, art.clone(), palette.clone(), ring, prev_art.clone(), next_art.clone())
-                },
-                |_, (bounds, art, palette, ring, prev_art, next_art), window, _| {
-                    let height = bounds.size.height.as_f32();
-                    let slots = art.len() as f32;
+            let scroll = (-ws.log_scroll.0.borrow().base_handle.offset().y).max(px(0.));
+            let first_visible = (scroll / row_h).floor() as usize;
+            // Rows visible = commit rows + the WIP row (painted above).
+            let last_visible = (((scroll + bounds.size.height) / row_h).ceil() as usize)
+                .min(graph.lanes.len() + has_wip);
 
-                    // git's text grid is TWO chars per lane: nodes and
-                    // verticals sit on even columns, bends (`\` `/`) on the
-                    // odd boundary between two lanes. Char → lane mapping:
-                    // an even column `c` is lane `c/2`; an odd bend column
-                    // `c` joins lanes `(c-1)/2` and `(c+1)/2`.
-                    let lane_of_char = |char_col: usize| char_col as f32 / 2.;
-                    let lane_left_of = |char_col: usize| (char_col as f32 - 1.) / 2.;
-                    let lane_right_of = |char_col: usize| (char_col as f32 + 1.) / 2.;
-                    // Lane x centers; clamp so a very deep lane does not
-                    // paint outside the cell (git rarely produces >5 wide).
-                    let x =
-                        |lane: f32| bounds.left() + px((LANE_W * lane + LANE_W / 2.).min(GRAPH_W));
-                    let slat = |li: usize| {
-                        let top = bounds.top() + px(height * li as f32 / slots);
-                        let bottom = bounds.top() + px(height * (li + 1) as f32 / slots);
-                        let mid = (top + bottom) / 2.;
-                        (top, bottom, mid)
-                    };
-                    // A bend starts from the node above when the slat above
-                    // carries the lane's own node — full-height curves
-                    // instead of a stubby hook inside the continuation slat.
-                    // The node sits on the bend's ORIGIN lane: for `\` that
-                    // is the lane left of the boundary (char `cc-1`), for
-                    // `/` the lane right of it (char `cc+1`).
-                    let node_origin =
-                        |art: &[String], li: usize, origin_char: usize| -> (Pixels, Pixels) {
-                            if li > 0 && art[li - 1].chars().nth(origin_char) == Some('*') {
-                                (x(lane_of_char(origin_char)), slat(li - 1).2)
-                            } else {
-                                (x(lane_of_char(origin_char)), slat(li).0)
-                            }
-                        };
+            let x = |column: usize| bounds.left() + lane_w * column as f32 + lane_w / 2.;
+            // Row Y in CANVAS coordinates: the list's logical position
+            // minus the scroll offset (the overlay never moves; the rows
+            // under it do).
+            let rc = |row: usize| bounds.top() + row_h * row as f32 + row_h / 2. - scroll;
 
-                    // Pass one: the passing lanes. Pass two: the nodes, so
-                    // a dot always paints over the lines it sits on.
-                    for (li, line) in art.iter().enumerate() {
-                        let (top, bottom, mid) = slat(li);
-                        for (cc, glyph) in line.chars().enumerate() {
-                            let color = lane_color(&palette, lane_of_char(cc) as usize);
-                            match glyph {
-                                '|' => {
-                                    paint_stroke(
-                                        point(x(lane_of_char(cc)), top),
-                                        point(x(lane_of_char(cc)), bottom),
-                                        color,
-                                        window,
-                                    );
-                                }
-                                // A `*` implies the lane passes through: git
-                                // prints no continuation line for it on
-                                // straight history — draw it here so
-                                // consecutive nodes stay connected. Each
-                                // half is drawn only when the lane really
-                                // passes on that side: a lane tip (nothing
-                                // above) gets no stub, a first divergent
-                                // node gets none below.
-                                '*' => {
-                                    let lane_index = lane_of_char(cc) as usize;
-                                    let passes_above =
-                                        li > 0 || lane_passes(prev_art.as_ref(), lane_index);
-                                    if passes_above {
-                                        paint_stroke(
-                                            point(x(lane_index as f32), top),
-                                            point(x(lane_index as f32), mid),
-                                            color,
-                                            window,
-                                        );
-                                    }
-                                    // Below the node: connect straight ONLY
-                                    // when the lane keeps running vertically.
-                                    // When a bend takes over right under the
-                                    // node (a `\` or `/` on either boundary
-                                    // touching this lane), the curve already
-                                    // leaves the node horizontally — the
-                                    // stub would double it.
-                                    let departs = lane_departs(next_art.as_ref(), lane_index);
-                                    if !departs {
-                                        paint_stroke(
-                                            point(x(lane_index as f32), mid),
-                                            point(x(lane_index as f32), bottom),
-                                            color,
-                                            window,
-                                        );
-                                    }
-                                }
-                                '\\' => {
-                                    let (from_x, from_y) = if cc > 0 {
-                                        node_origin(&art, li, cc - 1)
-                                    } else {
-                                        (x(0.), top)
-                                    };
-                                    // The curve belongs to the ORIGIN lane —
-                                    // the branch line it continues (GitKraken
-                                    // keeps a branch's color through its
-                                    // merge curve), not the destination.
-                                    let from_lane = lane_of_char(cc - 1) as usize;
-                                    paint_bend(
-                                        point(from_x, from_y),
-                                        x(lane_right_of(cc)),
-                                        bottom,
-                                        lane_color(&palette, from_lane),
-                                        window,
-                                    );
-                                }
-                                '/' => {
-                                    let (from_x, from_y) = node_origin(&art, li, cc + 1);
-                                    // Same rule, mirrored: origin lane on the
-                                    // right of the boundary.
-                                    let from_lane = lane_of_char(cc + 1) as usize;
-                                    paint_bend(
-                                        point(from_x, from_y),
-                                        x(lane_left_of(cc)),
-                                        bottom,
-                                        lane_color(&palette, from_lane),
-                                        window,
-                                    );
-                                }
-                                '-' | '_' => {
-                                    paint_stroke(
-                                        point(x(lane_left_of(cc)), mid),
-                                        point(x(lane_right_of(cc)), mid),
-                                        color,
-                                        window,
-                                    );
-                                }
-                                _ => {}
+            // Everything clips to the canvas bounds: a topology deeper
+            // than the gutter's lane cap paints up to the edge and stops
+            // — never over the title column.
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                // 1. Edges, grouped per color, culled by row interval.
+                let mut by_color: BTreeMap<usize, Vec<PathBuilder>> = BTreeMap::new();
+                for line in &graph.lines {
+                    let first = line.first_row + has_wip;
+                    let last = line.last_row + has_wip;
+                    if last < first_visible || first > last_visible {
+                        continue;
+                    }
+                    by_color
+                        .entry(line.color)
+                        .or_default()
+                        .push(build_line(line, &x, &rc, has_wip));
+                }
+                for (color, builders) in by_color {
+                    let color_hsla = palette_color(color);
+                    window.paint_layer(bounds, |window| {
+                        for builder in builders {
+                            if let Ok(path) = builder.build() {
+                                window.paint_path(path, color_hsla);
                             }
                         }
-                    }
-                    for (li, line) in art.iter().enumerate() {
-                        let (_, _, mid) = slat(li);
-                        for (cc, glyph) in line.chars().enumerate() {
-                            if glyph == '*' {
-                                paint_dot(
-                                    x(lane_of_char(cc)),
-                                    mid,
-                                    lane_color(&palette, lane_of_char(cc) as usize),
-                                    ring,
-                                    window,
-                                );
-                            }
-                        }
-                    }
-                },
-            )
-            .absolute()
-            .size_full(),
-        )
-        .into_any_element()
+                    });
+                }
+
+                // 2. Nodes, painted last so they sit over the lanes.
+                for row in first_visible..last_visible {
+                    let commit_ix = row.checked_sub(has_wip);
+                    let Some(commit_ix) = commit_ix else { continue };
+                    let Some(lane) = graph.lanes.get(commit_ix) else { continue };
+                    draw_commit_circle(
+                        x(lane.column),
+                        rc(row),
+                        palette_color(lane.color),
+                        cx.theme().background,
+                        window,
+                    );
+                }
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .bottom_0()
+    .left(px(super::GRAPH_COL_LEFT))
+    .w(gutter_w)
 }
 
-/// Plain muted dot for rows without art.
-fn fallback_dot(cx: &App) -> Div {
-    div()
-        .flex_none()
-        .w(px(GRAPH_W))
-        .h_full()
-        .flex()
-        .justify_center()
-        .child(div().size_2().rounded_full().bg(cx.theme().muted.opacity(0.6)))
-}
+fn build_line(
+    line: &EdgeLine,
+    x: &dyn Fn(usize) -> Pixels,
+    rc: &dyn Fn(usize) -> Pixels,
+    has_wip: usize,
+) -> PathBuilder {
+    let mut builder = PathBuilder::stroke(px(LINE_W));
+    builder.move_to(point(x(line.child_column), rc(line.child_row + has_wip)));
 
-/// Semantic lane palette (cycled by column index).
-fn lane_palette(cx: &App) -> Vec<Hsla> {
-    vec![
-        cx.theme().info,
-        cx.theme().success,
-        cx.theme().warning,
-        cx.theme().warning,
-        cx.theme().accent,
-    ]
-}
-
-fn lane_color(palette: &[Hsla], col: usize) -> Hsla {
-    palette[col % palette.len().max(1)]
-}
-
-/// Straight segment between two points.
-fn paint_stroke(from: Point<Pixels>, to: Point<Pixels>, color: Hsla, window: &mut Window) {
-    let mut builder = PathBuilder::stroke(px(2.));
-    builder.move_to(from);
-    builder.line_to(to);
-    if let Ok(path) = builder.build() {
-        window.paint_path(path, color);
+    let mut column = line.child_column;
+    for segment in line.segments.iter() {
+        match segment {
+            Segment::Straight { to_row } => {
+                builder.line_to(point(x(column), rc(*to_row + has_wip)));
+            }
+            Segment::Curve { to_column, on_row } => {
+                // Departure = the row above's center (the straight run
+                // before us always ends there); the S lands at this row's
+                // node. Full-height, never compressed.
+                let from_y = rc(on_row - 1 + has_wip);
+                let to_y = rc(*on_row + has_wip);
+                let mid_y = (from_y + to_y) / 2.;
+                // Doc note: `cubic_bezier_to` takes the END first.
+                builder.cubic_bezier_to(
+                    point(x(*to_column), to_y),
+                    point(x(column), mid_y),
+                    point(x(*to_column), mid_y),
+                );
+                column = *to_column;
+            }
+        }
     }
+    builder
 }
 
-/// S-curve from `from_x / top` to `to_x / bottom`: control points sit at
-/// the horizontal midpoint with the endpoints' y, so both ends leave and
-/// land horizontally — the GitKraken-looking bend for `\` and `/`.
-fn paint_bend(from: Point<Pixels>, to_x: Pixels, bottom: Pixels, color: Hsla, window: &mut Window) {
-    let mid_x = (from.x + to_x) / 2.;
-    let mut builder = PathBuilder::stroke(px(2.));
-    builder.move_to(from);
-    // Doc note: `cubic_bezier_to` takes the END point first, then controls.
-    builder.cubic_bezier_to(point(to_x, bottom), point(mid_x, from.y), point(mid_x, bottom));
-    if let Ok(path) = builder.build() {
-        window.paint_path(path, color);
-    }
+/// Row height of the log rows (`h_7`), snapped to the physical pixel so
+/// the canvas math agrees with `uniform_list`'s device-pixel snapping.
+fn row_height(window: &Window) -> Pixels {
+    let raw = window.rem_size() * 1.75;
+    let scale = window.scale_factor();
+    (raw * scale).round() / scale
 }
 
-/// Filled dot with a background-colored ring, so it separates from any
-/// lane passing beneath it.
-fn paint_dot(cx_dot: Pixels, cy: Pixels, color: Hsla, ring: Hsla, window: &mut Window) {
-    let halo = px(DOT_R + 0.6);
-    // Ring first (outsized, background color), then the dot over it.
-    let mut halo_builder = PathBuilder::fill();
-    halo_builder.move_to(point(cx_dot + halo, cy));
-    halo_builder.arc_to(point(halo, halo), px(0.), false, true, point(cx_dot - halo, cy));
-    halo_builder.arc_to(point(halo, halo), px(0.), false, true, point(cx_dot + halo, cy));
-    halo_builder.close();
-    if let Ok(path) = halo_builder.build() {
-        window.paint_path(path, ring);
-    }
+fn palette_color(index: usize) -> Hsla {
+    rgb(PALETTE_HEX[index % PALETTE_HEX.len()]).into()
+}
 
-    let radius = px(DOT_R);
+/// Ring-style commit node: background halo (masks crossing lanes),
+/// colored disc, background hole.
+fn draw_commit_circle(
+    cx_dot: Pixels,
+    cy: Pixels,
+    color: Hsla,
+    background: Hsla,
+    window: &mut Window,
+) {
+    fill_circle(cx_dot, cy, px(DOT_R + DOT_HALO_W), background, window);
+    fill_circle(cx_dot, cy, px(DOT_R), color, window);
+    fill_circle(cx_dot, cy, px((DOT_R - LINE_W).max(0.)), background, window);
+}
+
+/// Filled circle via two `arc_to` halves (SVG `A` semantics).
+fn fill_circle(cx_dot: Pixels, cy: Pixels, radius: Pixels, color: Hsla, window: &mut Window) {
     let mut builder = PathBuilder::fill();
     builder.move_to(point(cx_dot + radius, cy));
-    // `arc_to(radii, rotation, large_arc, sweep, end)` — SVG `A` order.
     builder.arc_to(point(radius, radius), px(0.), false, true, point(cx_dot - radius, cy));
     builder.arc_to(point(radius, radius), px(0.), false, true, point(cx_dot + radius, cy));
     builder.close();

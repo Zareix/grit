@@ -22,7 +22,7 @@ use grit_core::{
     Oid, Repo,
     branch::Branch,
     commit::Commit,
-    graph::GraphRow,
+    graph::GraphData,
     status::{FileEntry, Status},
     tags::Tag,
 };
@@ -184,8 +184,9 @@ pub struct Workspace {
     branches: Vec<Branch>,
     current_branch: Option<Branch>,
     tags: Vec<Tag>,
-    /// The log's lane art (same indexes as `log`), for the graph column.
-    graph_rows: Vec<GraphRow>,
+    /// Lane layout of the log (`None` before the first snapshot), for
+    /// the graph overlay painted over the log's graph column.
+    graph: Option<GraphData>,
     /// Tag names published on the default remote (origin-first), read by
     /// a background `ls-remote`; `None` = not known yet. Drives the
     /// "already on the remote" marker and the disabled `Push tag`.
@@ -301,7 +302,7 @@ impl Workspace {
             branches: Vec::new(),
             current_branch: None,
             tags: Vec::new(),
-            graph_rows: Vec::new(),
+            graph: None,
             remote_tags: None,
             remote_tags_attempt: None,
             stashes: Vec::new(),

@@ -22,8 +22,7 @@ use gpui_kit::*;
 mod graph;
 mod refs;
 
-use graph::graph_lane_cell;
-use grit_core::graph::GraphRow;
+use graph::{graph_overlay, gutter_width};
 
 use crate::workspace::Workspace;
 use grit_core::Commit;
@@ -32,12 +31,23 @@ use grit_core::Oid;
 /// Column widths, shared by the header labels and every row so the columns
 /// stay aligned across the whole list.
 const REFS_W: f32 = 176.;
-const GRAPH_W: f32 = 96.;
 const AUTHOR_W: f32 = 96.;
 const DATE_W: f32 = 112.;
 
+/// Left edge of the graph column inside the list: row padding (`px_3`)
+/// plus refs column plus the flex gap (`gap_3`). The graph overlay
+/// anchors to it, so its lane centers align with the empty slots every
+/// row keeps there.
+const GRAPH_COL_LEFT: f32 = 12. + REFS_W + 12.;
+
 /// The staging summary row shown above the current branch's commits.
-fn wip_row(ws: &Workspace, workspace: &WeakEntity<Workspace>, cx: &App) -> Stateful<Div> {
+/// `gutter` is the dynamic graph column width (see `gutter_width`).
+fn wip_row(
+    ws: &Workspace,
+    workspace: &WeakEntity<Workspace>,
+    gutter: Pixels,
+    cx: &App,
+) -> Stateful<Div> {
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
     // X/Y: staged files / all changed files (staged + unstaged).
@@ -66,7 +76,7 @@ fn wip_row(ws: &Workspace, workspace: &WeakEntity<Workspace>, cx: &App) -> State
         })
         // same column skeleton as commit rows
         .child(div().flex_none().w(px(REFS_W)).min_w_0())
-        .child(div().flex_none().w(px(GRAPH_W)).min_w_0())
+        .child(div().flex_none().w(gutter).min_w_0())
         .child(div().flex_1().min_w_0().truncate().text_color(cx.theme().info).child("// WIP"))
         .child(
             div()
@@ -82,23 +92,19 @@ fn wip_row(ws: &Workspace, workspace: &WeakEntity<Workspace>, cx: &App) -> State
 
 /// One commit row; click selects the commit (details on the right), and
 /// right-click offers checkout-at-commit / create branch / create tag.
+/// The graph lanes are NOT drawn here — the single overlay canvas
+/// (`graph_overlay`) paints them all at once over the empty column slot.
+/// `gutter` is dynamic (see `gutter_width`).
 fn commit_row(
     ws: &Workspace,
     workspace: &WeakEntity<Workspace>,
     commit: &Commit,
-    row_ix: usize,
-    graph: Option<&GraphRow>,
+    gutter: Pixels,
     cx: &App,
 ) -> gpui_kit::AnyElement {
     let border = cx.theme().border;
     let foreground = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
-    // Parallel arrays (`graph_rows` mirrors `log`): neighbours for the
-    // node-stub connections.
-    let (prev_graph, next_graph) = (
-        row_ix.checked_sub(1).and_then(|ix| ws.graph_rows.get(ix)),
-        ws.log.get(row_ix + 1).and_then(|_| ws.graph_rows.get(row_ix + 1)),
-    );
     let oid = commit.id;
     let is_selected = ws.selected_commit.as_ref().is_some_and(|sel| sel.id == oid);
     let refs = ws.refs_by_commit.get(&oid).map(Vec::as_slice).unwrap_or(&[]);
@@ -131,11 +137,11 @@ fn commit_row(
         // right-click — stacking the chip's menu under the row's at the
         // same position. Right-clicks on the refs cell itself (gaps)
         // open nothing.
+        // The graph slot stays EMPTY: the overlay paints all lanes in
+        // one pass (see `graph_overlay`); the slot only keeps the
+        // columns aligned.
         .child(refs::ref_chips(refs, oid, workspace, cx))
-        // Graph lanes: git's own art re-painted (see `graph_lane_cell`).
-        // Neighbours matter: node stubs only connect where the lane really
-        // passes (branch tips stop short, first divergences too).
-        .child(graph_lane_cell(graph, prev_graph, next_graph, cx))
+        .child(div().flex_none().w(gutter).min_w_0())
         .child(
             div()
                 .flex_1()
@@ -231,6 +237,9 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let muted = cx.theme().muted_foreground;
 
     let workspace = cx.entity().downgrade();
+    // The list closure owns its copy; the overlay borrows another (it
+    // clones internally).
+    let list_ws = workspace.clone();
 
     // The WIP row shows when the checked-out branch has pending changes:
     // nothing staged nor unstaged means no row at all.
@@ -238,11 +247,16 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let has_wip = changes > 0;
     let item_count = ws.log.len() + usize::from(has_wip);
 
+    // The graph gutter grows with the topology (how many lanes the
+    // layout ever used); every consumer — header, rows, overlay — takes
+    // the same value so the columns stay aligned.
+    let gutter = gutter_width(ws.graph.as_ref());
+
     // Column labels, aligned with the row columns.
-    let label = |title: &'static str, w: f32| {
+    let label = |title: &'static str, w: Pixels| {
         div()
             .flex_none()
-            .w(px(w))
+            .w(w)
             .min_w_0()
             .truncate()
             .text_size(px(10.))
@@ -290,8 +304,8 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .items_center()
                 .border_b_1()
                 .border_color(border.opacity(0.5))
-                .child(label("BRANCH / TAG", REFS_W))
-                .child(label("GRAPH", GRAPH_W))
+                .child(label("BRANCH / TAG", px(REFS_W)))
+                .child(label("GRAPH", gutter))
                 .child(
                     div()
                         .flex_1()
@@ -302,46 +316,47 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                         .text_color(muted)
                         .child("COMMIT MESSAGE"),
                 )
-                .child(label("AUTHOR", AUTHOR_W))
-                .child(label("DATE", DATE_W)),
+                .child(label("AUTHOR", px(AUTHOR_W)))
+                .child(label("DATE", px(DATE_W))),
         )
         // virtualized body: WIP (when present) is item 0, commits follow.
         // Branch clicks drive `ws.log_scroll` via `scroll_to_item`.
         .child(
-            uniform_list("commit-log", item_count, move |range, _window, cx| {
-                let Some(entity) = workspace.upgrade() else { return Vec::new() };
-                let ws = entity.read(cx);
+            div()
+                .flex()
+                .flex_col()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(
+                    uniform_list("commit-log", item_count, move |range, _window, cx| {
+                        let Some(entity) = list_ws.upgrade() else { return Vec::new() };
+                        let ws = entity.read(cx);
 
-                range
-                    .map(|ix| {
-                        // Must match the `has_wip` used for item_count above.
-                        let has_wip = !ws.status.is_empty();
-                        if has_wip && ix == 0 {
-                            return wip_row(ws, &workspace, cx).into_any_element();
-                        }
-                        let index = ix - usize::from(has_wip);
-                        match ws.log.get(index) {
-                            Some(commit) => {
-                                // Parallel arrays: a row's art is the one
-                                // whose commit id matches (defensive for
-                                // the pre-refresh first frame).
-                                let graph = ws
-                                    .graph_rows
-                                    .get(index)
-                                    .filter(|row| row.commit.id == commit.id);
-                                commit_row(ws, &workspace, commit, index, graph, cx)
-                                    .into_any_element()
-                            }
-                            None => div()
-                                .id(SharedString::from(format!("commit-empty-{ix}")))
-                                .into_any_element(),
-                        }
+                        range
+                            .map(|ix| {
+                                // Must match the `has_wip` used for item_count above.
+                                let has_wip = !ws.status.is_empty();
+                                if has_wip && ix == 0 {
+                                    return wip_row(ws, &list_ws, gutter, cx).into_any_element();
+                                }
+                                let index = ix - usize::from(has_wip);
+                                match ws.log.get(index) {
+                                    Some(commit) => commit_row(ws, &list_ws, commit, gutter, cx)
+                                        .into_any_element(),
+                                    None => div()
+                                        .id(SharedString::from(format!("commit-empty-{ix}")))
+                                        .into_any_element(),
+                                }
+                            })
+                            .collect()
                     })
-                    .collect()
-            })
-            .track_scroll(&ws.log_scroll)
-            .flex_1()
-            .min_h_0()
-            .w_full(),
+                    .track_scroll(&ws.log_scroll)
+                    .flex_1()
+                    .min_h_0()
+                    .w_full(),
+                )
+                .child(graph_overlay(&workspace, gutter)),
         )
 }

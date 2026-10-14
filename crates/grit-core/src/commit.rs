@@ -122,10 +122,16 @@ impl Repo {
     /// newest first by committer time. The graph shows the whole constellation:
     /// commits that live only on other branches — stale remote tips in
     /// particular — must appear too, carrying their ref chips.
+    ///
+    /// Sort is TOPOLOGICAL with time as the tiebreaker, like `git log
+    /// --graph`'s implicit ordering: a merge parent appears right after
+    /// its children, so the lane layout closes forks quickly (with plain
+    /// date order a fork whose base is old keeps its lane open for the
+    /// whole window and pushes the main line off to the right).
     pub fn commit_log_all(&self, limit: usize) -> Result<Vec<Commit>> {
         let repo = self.git2()?;
         let mut revwalk = repo.revwalk()?;
-        revwalk.set_sorting(git2::Sort::TIME)?;
+        revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
 
         // HEAD (skipped when unborn: empty repo, detached infant state).
         if let Some(head) = repo.head().ok().and_then(|h| h.peel_to_commit().ok()) {
