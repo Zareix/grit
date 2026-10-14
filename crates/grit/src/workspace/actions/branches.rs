@@ -14,6 +14,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use grit_core::{Oid, branch::BranchType};
 
+use super::dialogs::ConfirmSpec;
 use crate::workspace::{BranchOp, CreateTarget, Workspace};
 
 /// How a checkout of a local branch should behave regarding its upstream
@@ -300,6 +301,50 @@ impl Workspace {
             (a, b) if a > 0 && b > 0 => CheckoutSync::Diverged { to_ref, ahead: a, behind: b },
             _ => CheckoutSync::Plain, // ahead-only: nothing to level
         }
+    }
+
+    /// Force-checkout confirm dialog: a branch diverged from its upstream;
+    /// proceeding resets the branch to the upstream tip and discards the
+    /// local commits that are not on it.
+    pub(crate) fn open_force_checkout_dialog(
+        &mut self,
+        name: String,
+        to_ref: String,
+        ahead: usize,
+        behind: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let op = BranchOp::ForceCheckout { branch: name.clone(), to_ref: to_ref.clone() };
+        // Human spelling for the dialog; the op keeps the full ref.
+        let display =
+            to_ref.trim_start_matches("refs/heads/").trim_start_matches("refs/remotes/").to_owned();
+        let question = format!("Check out \"{name}\" and reset it to \"{display}\"?");
+        let detail = format!(
+            "\"{name}\" has diverged from \"{display}\": {ahead} commit(s) ahead, {behind} \
+             behind. A force checkout resets the branch to the upstream tip and discards \
+             the {ahead} local commit(s) not on it (still reachable through the reflog)."
+        );
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Force checkout?",
+                question,
+                detail,
+                confirm_label: "Force checkout",
+            },
+            move |ws, cx| {
+                if !ws.status.is_empty() {
+                    ws.error = Some(
+                        "Force checkout needs a clean working tree: commit or stash first.".into(),
+                    );
+                    cx.notify();
+                    return;
+                }
+                ws.run_branch_op(op.clone(), cx)
+            },
+            window,
+            cx,
+        );
     }
 }
 

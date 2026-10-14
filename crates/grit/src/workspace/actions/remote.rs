@@ -9,7 +9,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::*;
-use grit_core::{Repo, remote::RemoteOp};
+use grit_core::remote::RemoteOp;
 
 use super::dialogs::ConfirmSpec;
 use crate::workspace::{BranchOp, Workspace};
@@ -46,15 +46,27 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let remotes = match self.repo.as_ref().map(Repo::remotes) {
-            Some(Ok(remotes)) if !remotes.is_empty() => remotes,
-            _ => {
-                self.error = Some("Cannot set upstream: no remote configured".into());
+        // Any configured remote works (the dialog offers the first one); a
+        // remotes() read failure surfaces as an error, an empty list as the
+        // "no remote configured" message.
+        let Some(repo) = self.repo.as_ref() else {
+            self.error = Some("Cannot set upstream: no repository open".into());
+            cx.notify();
+            return;
+        };
+        let remote = match repo.remotes() {
+            Ok(remotes) => remotes.into_iter().next(),
+            Err(e) => {
+                self.error = Some(e.to_string().into());
                 cx.notify();
                 return;
             }
         };
-        let remote = remotes.first().cloned().expect("non-empty remotes");
+        let Some(remote) = remote else {
+            self.error = Some("Cannot set upstream: no remote configured".into());
+            cx.notify();
+            return;
+        };
         let branch_name = branch_name.to_string();
         let weak = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, dialog_cx| {
@@ -117,9 +129,14 @@ impl Workspace {
     /// Delete the remote branch on its server (`git push <remote> --delete
     /// <short>`); runs on the background thread like other remote ops.
     pub(crate) fn delete_remote_branch(&mut self, name: &str, cx: &mut Context<Self>) {
-        let remotes = match self.repo.as_ref().map(Repo::remotes) {
-            Some(Ok(remotes)) => remotes,
-            _ => Vec::new(),
+        let Some(repo) = self.repo.as_ref() else { return };
+        let remotes = match repo.remotes() {
+            Ok(remotes) => remotes,
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+                return;
+            }
         };
         let Some((remote, short)) = remotes
             .iter()
@@ -170,9 +187,14 @@ impl Workspace {
                 }]
             }
             BranchOp::FastForwardPush { from, remote_branch } => {
-                let remotes = match self.repo.as_ref().map(Repo::remotes) {
-                    Some(Ok(remotes)) => remotes,
-                    _ => Vec::new(),
+                let Some(repo) = self.repo.as_ref() else { return };
+                let remotes = match repo.remotes() {
+                    Ok(remotes) => remotes,
+                    Err(e) => {
+                        self.error = Some(e.to_string().into());
+                        cx.notify();
+                        return;
+                    }
                 };
                 // Resolve the longest configured remote prefix, like
                 // `checkout_remote_branch` does (an old remote name shared
