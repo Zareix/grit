@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/grit-core", "crates/grit"]
 
 [workspace.package]
-version = "0.5.2"
+version = "0.5.3"
 edition = "2024"
 license = "MIT"
 authors = ["Raphaël C."]

@@ -1,26 +1,18 @@
 name: Release
 
+# Version no longer comes from a CI regex: the tag you push IS the version
+# (v-prefixed). The per-binary `--version` check down below still guards
+# that the tagged commit's Cargo.toml really carries that version.
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
+    tags: ['v*']
 
 jobs:
-  version:
-    name: Get version
-    uses: zareix/gh-actions/.github/workflows/get-version.yml@main
-    with:
-      type: regex
-      file: Cargo.toml
-      # Workspace version ([workspace.package] at the top of the file).
-      regex: '^version = "\K[^"]+'
-
   build-macos:
     name: Build macOS (arm64)
     runs-on: macos-latest
-    needs: [version]
     env:
-      VERSION: ${{ needs.version.outputs.version }}
+      VERSION: ${{ github.ref_name }}
       APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
       NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
       NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
@@ -130,15 +122,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: grit-macos
-          path: grit-${{ needs.version.outputs.version }}-aarch64-macos.dmg
+          path: grit-${{ github.ref_name }}-aarch64-macos.dmg
           if-no-files-found: error
 
   build-windows:
     name: Build Windows (x64)
     runs-on: windows-latest
-    needs: [version]
     env:
-      VERSION: ${{ needs.version.outputs.version }}
+      VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
 
@@ -168,15 +159,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: grit-windows
-          path: grit-${{ needs.version.outputs.version }}-x64-windows.zip
+          path: grit-${{ github.ref_name }}-x64-windows.zip
           if-no-files-found: error
 
   build-linux:
     name: Build Linux (x64)
     runs-on: ubuntu-latest
-    needs: [version]
     env:
-      VERSION: ${{ needs.version.outputs.version }}
+      VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
 
@@ -214,14 +204,14 @@ jobs:
           cp target/release/grit dist/portable/grit/bin/grit
           cp packaging/grit.png \
             dist/portable/grit/share/icons/hicolor/256x256/apps/grit.png
-          tar -czf "grit-${{ needs.version.outputs.version }}-x64-linux.tar.gz" -C dist/portable grit
-          tar -tzf "grit-${{ needs.version.outputs.version }}-x64-linux.tar.gz"
+          tar -czf "grit-${{ github.ref_name }}-x64-linux.tar.gz" -C dist/portable grit
+          tar -tzf "grit-${{ github.ref_name }}-x64-linux.tar.gz"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: grit-linux
-          path: grit-${{ needs.version.outputs.version }}-x64-linux.tar.gz
+          path: grit-${{ github.ref_name }}-x64-linux.tar.gz
           if-no-files-found: error
 
   collect:
@@ -237,8 +227,10 @@ jobs:
 
       # One checksums file covering every asset, published with the release
       # (packaging guide: publish SHA-256 checksums next to the artifacts).
+      # Checksum lines carry bare filenames, so `shasum -a 256 -c` works
+      # directly inside the download folder.
       - name: Generate checksums
-        run: shasum -a 256 release-assets/* > release-assets/SHA256SUMS
+        run: cd release-assets && shasum -a 256 * > SHA256SUMS
 
       - uses: actions/upload-artifact@v7
         with:
@@ -248,10 +240,10 @@ jobs:
 
   release:
     name: Create release
-    needs: [version, collect]
+    needs: [collect]
     permissions:
       contents: write
     uses: zareix/gh-actions/.github/workflows/release.yml@main
     with:
-      tag: ${{ needs.version.outputs.version }}
+      tag: ${{ github.ref_name }}
       assets: git_desktop_release
