@@ -35,6 +35,15 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked -p grit
 
+      # The repackaged version must match the binary the release pretends to
+      # carry (packaging guide: confirm the embedded version before shipping).
+      - name: Check binary version
+        run: |
+          [[ "$(target/release/grit --version)" == "grit ${VERSION}" ]] || {
+            echo "Version mismatch: $(target/release/grit --version) != grit ${VERSION}" >&2
+            exit 1
+          }
+
       - name: Bundle .app
         run: |
           SHORT="${VERSION#v}"
@@ -94,13 +103,14 @@ jobs:
           cp -R grit.app dmg-root/grit.app
           ln -s /Applications dmg-root/Applications
           hdiutil create -volname Grit -srcfolder dmg-root \
-            -format UDZO "grit-aarch64-macos.dmg"
+            -format UDZO "grit-${SHORT}-aarch64-macos.dmg"
 
       - name: Notarize dmg
         run: |
+          DMG="grit-${SHORT}-aarch64-macos.dmg"
           P8="$RUNNER_TEMP/notary.p8"
           echo "$NOTARY_P8" | base64 --decode --output "$P8"
-          xcrun notarytool submit "grit-aarch64-macos.dmg" \
+          xcrun notarytool submit "$DMG" \
             --key "$P8" \
             --key-id "$NOTARY_KEY_ID" \
             --issuer "$NOTARY_ISSUER_ID" \
@@ -108,15 +118,16 @@ jobs:
 
       - name: Staple dmg
         run: |
-          xcrun stapler staple grit-aarch64-macos.dmg
+          DMG="grit-${SHORT}-aarch64-macos.dmg"
+          xcrun stapler staple "$DMG"
           # Validation check before shipping per the packaging guide.
-          xcrun stapler validate grit-aarch64-macos.dmg
+          xcrun stapler validate "$DMG"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: grit-macos
-          path: grit-aarch64-macos.dmg
+          path: grit-${{ needs.version.outputs.version }}-aarch64-macos.dmg
           if-no-files-found: error
 
   build-windows:
@@ -133,15 +144,24 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked -p grit
 
+      - name: Check binary version
+        shell: pwsh
+        run: |
+          $binaryVersion = (& target\release\grit.exe --version).Trim()
+          if ($binaryVersion -ne "grit $env:VERSION") {
+            Write-Error "Version mismatch: $binaryVersion != grit $env:VERSION"
+            exit 1
+          }
+
       - name: Package exe
         shell: pwsh
-        run: Compress-Archive -Path target/release/grit.exe -DestinationPath "grit-x64-windows.zip"
+        run: Compress-Archive -Path target/release/grit.exe -DestinationPath "grit-${env:VERSION}-x64-windows.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: grit-windows
-          path: grit-x64-windows.zip
+          path: grit-${{ needs.version.outputs.version }}-x64-windows.zip
           if-no-files-found: error
 
   build-linux:
@@ -169,6 +189,14 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked -p grit
 
+      # Same assertion as the other jobs: shipped binary matches the version.
+      - name: Check binary version
+        run: |
+          [[ "$(target/release/grit --version)" == "grit ${{ needs.version.outputs.version }}" ]] || {
+            echo "Version mismatch: $(target/release/grit --version)" >&2
+            exit 1
+          }
+
       - name: Package tarball
         run: |
           mkdir -p dist/portable/grit/bin \
@@ -176,14 +204,14 @@ jobs:
           cp target/release/grit dist/portable/grit/bin/grit
           cp packaging/grit.png \
             dist/portable/grit/share/icons/hicolor/256x256/apps/grit.png
-          tar -czf "grit-x64-linux.tar.gz" -C dist/portable grit
-          tar -tzf "grit-x64-linux.tar.gz"
+          tar -czf "grit-${{ needs.version.outputs.version }}-x64-linux.tar.gz" -C dist/portable grit
+          tar -tzf "grit-${{ needs.version.outputs.version }}-x64-linux.tar.gz"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: grit-linux
-          path: grit-x64-linux.tar.gz
+          path: grit-${{ needs.version.outputs.version }}-x64-linux.tar.gz
           if-no-files-found: error
 
   collect:
@@ -196,6 +224,11 @@ jobs:
           pattern: grit-*
           merge-multiple: true
           path: release-assets
+
+      # One checksums file covering every asset, published with the release
+      # (packaging guide: publish SHA-256 checksums next to the artifacts).
+      - name: Generate checksums
+        run: shasum -a 256 release-assets/* > release-assets/SHA256SUMS
 
       - uses: actions/upload-artifact@v7
         with:

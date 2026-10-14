@@ -1,5 +1,6 @@
 //! Grit — a native Git client built in Rust with GPUI Kit.
 
+mod about;
 mod session;
 mod workspace;
 
@@ -58,7 +59,7 @@ impl AssetSource for AppAssets {
     }
 }
 
-actions!(grit, [Quit, NewTab, CloseTab]);
+actions!(grit, [Quit, NewTab, CloseTab, About]);
 
 /// Route a tab-level action to the root [`Session`] of the active window.
 /// Same global-handler pattern as gpui-kit's inspector toggle: the binding
@@ -83,6 +84,13 @@ fn route_tab_action(
 }
 
 fn main() {
+    // Optional --version: standard CLI flag, mirrored by the CI release
+    // check that the repackaged binary matches the packaged version.
+    if std::env::args().skip(1).any(|a| a == "--version" || a == "-V") {
+        println!("grit {}", about::VERSION);
+        return;
+    }
+
     // Optional repo path from the CLI; without one the session shows the
     // tab picker page (or restores the persisted tabs).
     let repo_path = std::env::args().nth(1);
@@ -109,7 +117,11 @@ fn main() {
         // active window's root Session.
         cx.on_action(|_: &NewTab, cx| route_tab_action(cx, |s, cx| s.open_new_tab(cx)));
         cx.on_action(|_: &CloseTab, cx| route_tab_action(cx, |s, cx| s.close_active_tab(cx)));
+        cx.on_action(|_: &About, cx| about::open_about_window(cx));
+        // "About" is the first item of the app menu, macOS convention.
         cx.set_menus([Menu::new("Grit").items([
+            MenuItem::action("About Grit", About),
+            MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
             MenuItem::action("Quit", Quit),
