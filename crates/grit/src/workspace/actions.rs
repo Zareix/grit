@@ -12,7 +12,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::*;
-use grit_core::{Oid, RemoteOp, Repo, branch::BranchType};
+use grit_core::{Oid, RemoteOp, Repo, branch::BranchType, status::FileEntry};
 
 use super::{BranchOp, CommitRef, CommitRefKind, CopyPath, CreateTarget, Workspace};
 
@@ -78,6 +78,7 @@ impl Workspace {
                 self.log = log;
                 self.rebuild_refs();
                 self.compute_branch_relations(&repo);
+                self.prune_selection();
                 self.sync_remote_tree(cx);
                 self.error = None;
                 self.sync_selection(&repo, cx);
@@ -100,6 +101,20 @@ impl Workspace {
         self.branch_relations = repo
             .ahead_behind_all(&tips)
             .unwrap_or_else(|_| std::mem::take(&mut self.branch_relations));
+    }
+
+    /// Drop the selection's files that left the selected staging side:
+    /// staging/unstaging rewrites both lists and stale paths must not stay
+    /// highlighted. `selected_path` is cleaned by `sync_selection` itself.
+    fn prune_selection(&mut self) {
+        let side: &Vec<FileEntry> =
+            if self.selected_staged { &self.status.staged } else { &self.status.unstaged };
+        self.selected_paths.retain(|p| side.iter().any(|e| e.path == *p));
+        if let Some(anchor) = &self.selection_anchor
+            && !self.selected_paths.iter().any(|p| p == anchor)
+        {
+            self.selection_anchor = None;
+        }
     }
 
     /// Push the current remote branches into the tree state as a GitKraken-
@@ -209,8 +224,67 @@ impl Workspace {
         }
     }
 
-    /// Click on a file row: select it and show its diff.
+    /// Click on a file row: select it and show its diff. Resets any
+    /// multi-selection to this single file.
     pub(crate) fn select_file(&mut self, path: PathBuf, staged: bool, cx: &mut Context<Self>) {
+        self.selected_paths = vec![path.clone()];
+        self.selection_anchor = Some(path.clone());
+        self.show_worktree_diff(path, staged, cx);
+    }
+
+    /// Command/Ctrl-click on a file row: toggle the file into the current
+    /// selection (same staging side, else starts a fresh single selection
+    /// on the clicked side). The diff pane follows the file.
+    pub(crate) fn toggle_file_selection(
+        &mut self,
+        path: PathBuf,
+        staged: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_staged != staged || self.selected_paths.is_empty() {
+            return self.select_file(path, staged, cx);
+        }
+        if let Some(pos) = self.selected_paths.iter().position(|p| *p == path) {
+            self.selected_paths.remove(pos);
+            if self.selected_paths.is_empty() {
+                self.selected_path = None;
+                self.hide_diff_panel();
+                self.clear_diff(cx);
+            }
+        } else {
+            self.selected_paths.push(path.clone());
+            self.show_worktree_diff(path.clone(), staged, cx);
+        }
+        self.selection_anchor = Some(path);
+        cx.notify();
+    }
+
+    /// Shift-click on a file row: extend the selection from the anchor
+    /// file (last plain/Command click) up to this one, on the same side.
+    /// The anchor stays put, so a further shift-click re-extends it.
+    pub(crate) fn extend_file_selection(
+        &mut self,
+        path: PathBuf,
+        staged: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(anchor) =
+            self.selection_anchor.clone().filter(|a| self.selected_paths.iter().any(|p| p == a))
+        else {
+            return self.select_file(path, staged, cx);
+        };
+        let list: &Vec<FileEntry> =
+            if staged { &self.status.staged } else { &self.status.unstaged };
+        let (Some(a), Some(c)) = (position_of(list, &anchor), position_of(list, &path)) else {
+            return self.select_file(path, staged, cx);
+        };
+        let (start, end) = (a.min(c), a.max(c) + 1);
+        self.selected_paths = list[start..end].iter().map(|e| e.path.clone()).collect();
+        self.show_worktree_diff(path, staged, cx);
+    }
+
+    /// Show the worktree diff of one file, as the diff pane's selection.
+    fn show_worktree_diff(&mut self, path: PathBuf, staged: bool, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.clone() else { return };
         self.show_diff_panel(cx);
         self.selected_path = Some(path.clone());
@@ -287,11 +361,24 @@ impl Workspace {
     }
 
     /// Click on a staged file unstages it; on an unstaged file stages it.
+    /// When the row's file is part of the current multi-selection (and the
+    /// selection holds several files), the command applies to the whole
+    /// selection.
     pub(crate) fn toggle_file(&mut self, path: PathBuf, staged: bool, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.clone() else { return };
-        let result = if staged { repo.unstage_file(&path) } else { repo.stage_file(&path) };
-        if let Err(e) = result {
-            self.error = Some(e.to_string().into());
+        let targets: Vec<PathBuf> = if self.selected_staged == staged
+            && self.selected_paths.len() > 1
+            && self.selected_paths.iter().any(|p| p == &path)
+        {
+            self.selected_paths.clone()
+        } else {
+            vec![path]
+        };
+        for p in &targets {
+            let result = if staged { repo.unstage_file(p) } else { repo.stage_file(p) };
+            if let Err(e) = result {
+                self.error = Some(e.to_string().into());
+            }
         }
         self.refresh(cx);
     }
@@ -1226,6 +1313,11 @@ impl Workspace {
         })
         .detach();
     }
+}
+
+/// Position of a file path inside a staging list (None when absent).
+fn position_of(list: &[FileEntry], path: &Path) -> Option<usize> {
+    list.iter().position(|e| e.path == path)
 }
 
 /// Run each candidate launcher command until one exits successfully; the

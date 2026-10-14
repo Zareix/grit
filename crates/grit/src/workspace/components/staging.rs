@@ -134,7 +134,7 @@ fn file_row(
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_string_lossy().into_owned());
     let path = entry.path.clone();
-    let is_selected = ws.selected_path.as_ref() == Some(&entry.path);
+    let is_selected = ws.selected_paths.iter().any(|p| p == &entry.path);
     let (toggle_icon, toggle_id) =
         if staged { (IconName::Minus, "unstage") } else { (IconName::Plus, "stage") };
 
@@ -152,15 +152,30 @@ fn file_row(
         .gap_1p5()
         .px_2()
         .rounded_sm()
-        .when(is_selected, |this| this.bg(accent.opacity(0.3)))
+        .when(is_selected, |this| this.bg(accent))
         .when(!is_selected, |this| {
             this.cursor_pointer().hover(|style| style.bg(border.opacity(0.4)))
         })
         .on_click({
             let workspace = workspace.clone();
             let path = path.clone();
-            move |_, _, cx| {
-                workspace.update(cx, |ws, cx| ws.select_file(path.clone(), staged, cx)).ok();
+            move |ev, _, cx| {
+                let modifiers = ev.modifiers();
+                let add = modifiers.platform || modifiers.control;
+                let extend = modifiers.shift;
+                workspace
+                    .update(cx, |ws, cx| {
+                        if extend {
+                            // Shift-click: extend from the anchor file.
+                            ws.extend_file_selection(path.clone(), staged, cx)
+                        } else if add {
+                            // Cmd/Ctrl-click: toggle into the selection.
+                            ws.toggle_file_selection(path.clone(), staged, cx)
+                        } else {
+                            ws.select_file(path.clone(), staged, cx)
+                        }
+                    })
+                    .ok();
             }
         })
         // badge — left slot, centered by the row's items_center
@@ -239,9 +254,25 @@ fn file_menu(
         menu
     });
 
+    // The state command follows the selection: right-clicking a row inside
+    // a multi-selection acts on all of its files.
+    let count = workspace
+        .upgrade()
+        .map(|entity| entity.read(cx))
+        .filter(|ws| ws.selected_staged == staged && ws.selected_paths.iter().any(|p| p == path))
+        .map(|ws| ws.selected_paths.len())
+        .unwrap_or(1);
+    let state_label = if count > 1 {
+        format!("{} {} files", if staged { "Unstage" } else { "Stage" }, count)
+    } else if staged {
+        "Unstage".to_owned()
+    } else {
+        "Stage".to_owned()
+    };
+
     menu = menu
         .item(
-            PopupMenuItem::new(if staged { "Unstage" } else { "Stage" })
+            PopupMenuItem::new(state_label)
                 .icon(if staged { IconName::Minus } else { IconName::Plus })
                 .on_click({
                     let workspace = workspace.clone();

@@ -133,6 +133,12 @@ pub struct Workspace {
     selected_path: Option<PathBuf>,
     /// Whether the selected file's diff is the staged one (HEAD -> index).
     selected_staged: bool,
+    /// Files highlighted in one staging side (staged or unstaged); the diff
+    /// pane follows `selected_path`, the file clicked last.
+    selected_paths: Vec<PathBuf>,
+    /// First file of the current selection — shift-click extends the
+    /// selection from it to the clicked file.
+    selection_anchor: Option<PathBuf>,
     /// Diff viewer state: one `DiffFile` for the selected file, kept across
     /// selections so expansion / scroll position behave sanely.
     diff: Entity<DiffState>,
@@ -228,6 +234,8 @@ impl Workspace {
             pending_create: None,
             selected_path: None,
             selected_staged: false,
+            selected_paths: Vec::new(),
+            selection_anchor: None,
             diff,
             log: Vec::new(),
             branches: Vec::new(),
