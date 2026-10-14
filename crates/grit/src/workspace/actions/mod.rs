@@ -13,15 +13,62 @@ mod dialogs;
 mod fs;
 mod remote;
 
+use std::collections::HashMap;
+
 use gpui_kit::component::diff::{DiffFile, DiffMode};
 use gpui_kit::*;
-use grit_core::{Oid, Repo, branch::BranchType, status::FileEntry};
+use grit_core::{
+    Oid, Repo,
+    branch::{Branch, BranchType},
+    commit::Commit,
+    status::{FileEntry, Status},
+    tags::Tag,
+};
 
-use super::{CommitRef, CommitRefKind, Workspace};
+use super::{CommitRef, CommitRefKind, Stash, Workspace};
 
 /// Commit-log depth loaded on every refresh; also quoted by the
 /// "older than window" info message in `reveal_branch`.
 pub(crate) const MAX_LOG_COMMITS: usize = 500;
+
+/// Full repository state read in one background pass; `refresh` applies
+/// it on the UI thread when ready.
+struct RepoSnapshot {
+    status: Status,
+    branches: Vec<Branch>,
+    current_branch: Option<Branch>,
+    tags: Vec<Tag>,
+    log: Vec<Commit>,
+    stashes: Vec<Stash>,
+    /// Ahead/behind counts between all branch tip pairs (`relations[a][b]`
+    /// = commits unique to `a`, then commits unique to `b`). Shares a
+    /// tip's row when two branches point at the same commit. On read
+    /// failure the caller's previous table is kept.
+    branch_relations: HashMap<Oid, HashMap<Oid, (usize, usize)>>,
+}
+
+impl RepoSnapshot {
+    fn read(
+        repo: &Repo,
+        max_log: usize,
+        previous_relations: &HashMap<Oid, HashMap<Oid, (usize, usize)>>,
+    ) -> grit_core::Result<Self> {
+        let status = repo.status()?;
+        let branches = repo.branches()?;
+        let current_branch = repo.current_branch()?;
+        let tags = repo.tags()?;
+        let log = repo.commit_log_all(max_log)?;
+        let stashes = repo.stashes()?;
+
+        let mut tips: Vec<Oid> = branches.iter().map(|b| b.head).collect();
+        tips.sort_unstable();
+        tips.dedup();
+        let branch_relations =
+            repo.ahead_behind_all(&tips).unwrap_or_else(|_| previous_relations.clone());
+
+        Ok(Self { status, branches, current_branch, tags, log, stashes, branch_relations })
+    }
+}
 
 impl Workspace {
     pub(crate) fn open(&mut self, path: String, cx: &mut Context<Self>) {
@@ -39,52 +86,53 @@ impl Workspace {
         }
     }
 
-    /// Reload status, branches and commit log from disk.
+    /// Reload status, branches and commit log from disk. The read runs on
+    /// the background executor (it walks the worktree and the ODB); the
+    /// snapshot applies on the UI thread when ready. A generation counter
+    /// drops snapshots of refreshes superseded while in flight.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(repo) = self.repo.clone() else {
-            return;
-        };
+        let Some(repo) = self.repo.clone() else { return };
+        self.refresh_seq += 1;
+        let seq = self.refresh_seq;
+        let previous_relations = self.branch_relations.clone();
 
-        match (
-            repo.status(),
-            repo.branches(),
-            repo.current_branch(),
-            repo.tags(),
-            repo.commit_log_all(MAX_LOG_COMMITS),
-            repo.stashes(),
-        ) {
-            (Ok(status), Ok(branches), Ok(current), Ok(tags), Ok(log), Ok(stashes)) => {
-                self.status = status;
-                self.branches = branches;
-                self.current_branch = current;
-                self.tags = tags;
-                self.log = log;
-                self.stashes = stashes;
-                self.rebuild_refs();
-                self.compute_branch_relations(&repo);
-                self.prune_selection();
-                self.sync_remote_tree(cx);
-                self.error = None;
-                self.sync_selection(&repo, cx);
-            }
-            _ => {
-                self.error = Some("Failed to read repository state".into());
-            }
-        }
-        cx.notify();
+        let job = cx.background_spawn(async move {
+            RepoSnapshot::read(&repo, MAX_LOG_COMMITS, &previous_relations)
+        });
+        cx.spawn(async move |this, cx| {
+            let snapshot = job.await;
+            this.update(cx, |this, cx| {
+                match snapshot {
+                    Ok(snapshot) if seq == this.refresh_seq => this.apply_snapshot(snapshot, cx),
+                    Err(_) if seq == this.refresh_seq => {
+                        this.error = Some("Failed to read repository state".into());
+                    }
+                    _ => {} // stale snapshot: a newer refresh superseded it
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
-    /// Ahead/behind counts between all branch tip pairs, stored for the
-    /// branch context menus (`relations[a][b]` = commits unique to `a`,
-    /// then commits unique to `b`). Shares a tip's row when two branches
-    /// point at the same commit.
-    fn compute_branch_relations(&mut self, repo: &Repo) {
-        let mut tips: Vec<Oid> = self.branches.iter().map(|b| b.head).collect();
-        tips.sort_unstable();
-        tips.dedup();
-        self.branch_relations = repo
-            .ahead_behind_all(&tips)
-            .unwrap_or_else(|_| std::mem::take(&mut self.branch_relations));
+    /// Apply a freshly read snapshot: cached fields, then the derived
+    /// state, then the selection sync against the new status.
+    fn apply_snapshot(&mut self, snapshot: RepoSnapshot, cx: &mut Context<Self>) {
+        self.status = snapshot.status;
+        self.branches = snapshot.branches;
+        self.current_branch = snapshot.current_branch;
+        self.tags = snapshot.tags;
+        self.log = snapshot.log;
+        self.stashes = snapshot.stashes;
+        self.branch_relations = snapshot.branch_relations;
+        self.rebuild_refs();
+        self.prune_selection();
+        self.sync_remote_tree(cx);
+        self.error = None;
+        if let Some(repo) = self.repo.clone() {
+            self.sync_selection(&repo, cx);
+        }
     }
 
     /// Drop the selection's files that left the selected staging side:

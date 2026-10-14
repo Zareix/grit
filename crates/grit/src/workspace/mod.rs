@@ -183,6 +183,10 @@ pub struct Workspace {
     log_scroll: UniformListScrollHandle,
     /// Commit selected in the history (its details replace the staging panel).
     selected_commit: Option<Commit>,
+    /// Generation counter bumped on every `refresh`; a background snapshot
+    /// from a superseded refresh is dropped instead of overwriting fresher
+    /// state.
+    refresh_seq: u64,
     /// Files changed by the selected commit.
     commit_files: Vec<FileEntry>,
     /// Whether `selected_path`'s diff comes from the selected commit (rather
@@ -265,6 +269,7 @@ impl Workspace {
             info: None,
             log_scroll: UniformListScrollHandle::new(),
             selected_commit: None,
+            refresh_seq: 0,
             commit_files: Vec::new(),
             diff_from_commit: false,
             diff_open: false,
