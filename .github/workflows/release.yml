@@ -38,9 +38,11 @@ jobs:
       # The repackaged version must match the binary the release pretends to
       # carry (packaging guide: confirm the embedded version before shipping).
       - name: Check binary version
+        # Binary prints the Cargo version (0.5.2); tag output carries a v
+        # prefix — strip it for the comparison.
         run: |
-          [[ "$(target/release/grit --version)" == "grit ${VERSION}" ]] || {
-            echo "Version mismatch: $(target/release/grit --version) != grit ${VERSION}" >&2
+          [[ "$(target/release/grit --version)" == "grit ${VERSION#v}" ]] || {
+            echo "Version mismatch: $(target/release/grit --version) != grit ${VERSION#v}" >&2
             exit 1
           }
 
@@ -97,17 +99,18 @@ jobs:
 
       - name: Create dmg
         # dmg-root staging: app + /Applications symlink for the classic
-        # drag-and-drop install, per the packaging guide.
+        # drag-and-drop install, per the packaging guide. VERSION is the
+        # job env (v-prefixed) and stays in scope for every step.
         run: |
           mkdir -p dmg-root
           cp -R grit.app dmg-root/grit.app
           ln -s /Applications dmg-root/Applications
           hdiutil create -volname Grit -srcfolder dmg-root \
-            -format UDZO "grit-${SHORT}-aarch64-macos.dmg"
+            -format UDZO "grit-${VERSION}-aarch64-macos.dmg"
 
       - name: Notarize dmg
         run: |
-          DMG="grit-${SHORT}-aarch64-macos.dmg"
+          DMG="grit-${VERSION}-aarch64-macos.dmg"
           P8="$RUNNER_TEMP/notary.p8"
           echo "$NOTARY_P8" | base64 --decode --output "$P8"
           xcrun notarytool submit "$DMG" \
@@ -118,7 +121,7 @@ jobs:
 
       - name: Staple dmg
         run: |
-          DMG="grit-${SHORT}-aarch64-macos.dmg"
+          DMG="grit-${VERSION}-aarch64-macos.dmg"
           xcrun stapler staple "$DMG"
           # Validation check before shipping per the packaging guide.
           xcrun stapler validate "$DMG"
@@ -128,12 +131,12 @@ jobs:
         with:
           name: grit-macos
           path: grit-${{ needs.version.outputs.version }}-aarch64-macos.dmg
-          if-no-files-found: error
-
-  build-windows:
+          if-no-files-found: error  build-windows:
     name: Build Windows (x64)
     runs-on: windows-latest
     needs: [version]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -145,11 +148,13 @@ jobs:
         run: cargo build --release --locked -p grit
 
       - name: Check binary version
+        # Binary prints the Cargo version; tag output carries a v prefix.
         shell: pwsh
         run: |
           $binaryVersion = (& target\release\grit.exe --version).Trim()
-          if ($binaryVersion -ne "grit $env:VERSION") {
-            Write-Error "Version mismatch: $binaryVersion != grit $env:VERSION"
+          $expected = "grit $($env:VERSION -replace '^v', '')"
+          if ($binaryVersion -ne $expected) {
+            Write-Error "Version mismatch: $binaryVersion != $expected"
             exit 1
           }
 
@@ -167,6 +172,9 @@ jobs:
   build-linux:
     name: Build Linux (x64)
     runs-on: ubuntu-latest
+    needs: [version]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -192,8 +200,8 @@ jobs:
       # Same assertion as the other jobs: shipped binary matches the version.
       - name: Check binary version
         run: |
-          [[ "$(target/release/grit --version)" == "grit ${{ needs.version.outputs.version }}" ]] || {
-            echo "Version mismatch: $(target/release/grit --version)" >&2
+          [[ "$(target/release/grit --version)" == "grit ${VERSION#v}" ]] || {
+            echo "Version mismatch: $(target/release/grit --version) != grit ${VERSION#v}" >&2
             exit 1
           }
 
