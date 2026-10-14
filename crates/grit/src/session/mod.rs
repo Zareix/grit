@@ -119,6 +119,17 @@ impl Session {
         self.persist(cx);
     }
 
+    /// Run `operate` on the active tab's workspace; picker tabs skip.
+    pub(crate) fn with_active_workspace(
+        &mut self,
+        operate: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(TabEntry::Repo { workspace, .. }) = self.tabs.get(self.active) {
+            workspace.update(cx, operate);
+        }
+    }
+
     // ---- repo opening ---------------------------------------------------
 
     /// Native folder picker → open the chosen repo as a tab.

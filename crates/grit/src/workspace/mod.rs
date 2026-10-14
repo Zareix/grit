@@ -71,6 +71,40 @@ pub enum CreateTarget {
 /// A stash in the branches column's stash panel.
 pub type Stash = grit_core::stash::Stash;
 
+/// What the auto-updater has last learned; rendered by the status bar and
+/// driven by the menu / button / dialogs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateState {
+    /// Nothing known (or the check found nothing to do) — no UI.
+    Idle,
+    /// A network check is running.
+    Checking,
+    /// A newer release is published; the status bar shows the "Update
+    /// available" button that opens the confirm dialog.
+    Available(AvailableUpdate),
+    /// Download / verify / install in progress (phase label for the bar).
+    Busy(&'static str),
+    /// Installed and validated; the bar shows "Restart to update".
+    ReadyToRestart,
+}
+
+/// A newer published release, resolved against this build's platform.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvailableUpdate {
+    /// Clean version ("0.6.0", mux without the tag's `v` prefix).
+    pub version: String,
+    /// Release notes (`body`), shown in the confirm dialog.
+    pub notes: Option<String>,
+    /// DMG asset name ("grit-v0.6.0-aarch64-macos.dmg").
+    pub asset: String,
+    /// Direct download URL of the DMG.
+    pub url: String,
+    /// Direct download URL of the release's SHA256SUMS digest file.
+    pub checksum_url: String,
+    /// DMG size in bytes (asset metadata), for the dialog.
+    pub size: u64,
+}
+
 /// Branch-to-branch operations. Targets are full git refs (`refs/heads/x`,
 /// `refs/remotes/origin/x`) so remote tips can serve as sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,6 +230,8 @@ pub struct Workspace {
     /// open transition (frame-sized panel layout resets).
     diff_open: bool,
     error: Option<SharedString>,
+    /// Auto-updater state, surfaced in the status bar (see `UpdateState`).
+    update_state: UpdateState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -274,9 +310,12 @@ impl Workspace {
             diff_from_commit: false,
             diff_open: false,
             error: None,
+            update_state: UpdateState::Idle,
             _subscriptions: vec![enter_subscription, name_enter_subscription, tree_subscription],
         };
         this.open(path, cx);
+        // Launch auto-check (throttled to once >> 24h; silent failures).
+        this.maybe_check_for_updates(cx);
         this
     }
 }

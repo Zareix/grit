@@ -59,7 +59,7 @@ impl AssetSource for AppAssets {
     }
 }
 
-actions!(grit, [Quit, NewTab, CloseTab, About]);
+actions!(grit, [Quit, NewTab, CloseTab, About, CheckForUpdates]);
 
 /// Route a tab-level action to the root [`Session`] of the active window.
 /// Same global-handler pattern as gpui-kit's inspector toggle: the binding
@@ -118,9 +118,15 @@ fn main() {
         cx.on_action(|_: &NewTab, cx| route_tab_action(cx, |s, cx| s.open_new_tab(cx)));
         cx.on_action(|_: &CloseTab, cx| route_tab_action(cx, |s, cx| s.close_active_tab(cx)));
         cx.on_action(|_: &About, cx| about::open_about_window(cx));
-        // "About" is the first item of the app menu, macOS convention.
+        cx.on_action(|_: &CheckForUpdates, cx| {
+            route_tab_action(cx, |s, cx| {
+                s.with_active_workspace(|ws, cx| ws.check_for_updates(cx), cx)
+            })
+        });
+        // macOS app menu, About first (convention), update check under it.
         cx.set_menus([Menu::new("Grit").items([
             MenuItem::action("About Grit", About),
+            MenuItem::action("Check for Updates", CheckForUpdates),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),

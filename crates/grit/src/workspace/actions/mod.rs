@@ -12,6 +12,7 @@ mod commit;
 mod dialogs;
 mod fs;
 mod remote;
+mod update;
 
 use std::collections::HashMap;
 

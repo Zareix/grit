@@ -12,7 +12,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use crate::workspace::Workspace;
+use crate::workspace::{UpdateState, Workspace};
 
 /// Text payload of a destructive-action confirm dialog (see
 /// [`Workspace::open_confirm_dialog`]).
@@ -132,6 +132,56 @@ impl Workspace {
                         )),
                 )
         });
+    }
+
+    /// Update-available confirm dialog: release notes + download, or the
+    /// restart confirmation once the update is already installed.
+    pub(crate) fn open_update_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let UpdateState::Available(update) = self.update_state.clone() else { return };
+        let mut detail = format!(
+            "The release is {:.1} MB and requires a restart to apply (signature and \
+             SHA-256 are verified before installation).",
+            update.size as f64 / (1024. * 1024.)
+        );
+        // Release notes: keep the first changelog lines readable.
+        if let Some(notes) = update.notes.as_deref() {
+            let shown = notes.lines().take(6).collect::<Vec<_>>().join("\n- ");
+            if !shown.is_empty() {
+                detail = format!("- {shown}\n{detail}");
+            }
+        }
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Update Grit?",
+                question: format!("Install Grit v{}?", update.version),
+                detail,
+                confirm_label: "Download & install",
+            },
+            // Confirm runs the background install; no state held across.
+            move |ws, cx| ws.install_update(cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Restart confirmation after a verified update swap.
+    pub(crate) fn open_restart_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.update_state, UpdateState::ReadyToRestart) {
+            return;
+        }
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Restart to finish the update?",
+                question: "The new version is installed. Restart Grit now?".into(),
+                detail: "The current window keeps running the old version until you \
+                         restart."
+                    .into(),
+                confirm_label: "Restart now",
+            },
+            move |ws, cx| ws.restart_after_update(cx),
+            window,
+            cx,
+        );
     }
 
     /// Stash the selected staging files (`git stash push -u -- <paths>`,
