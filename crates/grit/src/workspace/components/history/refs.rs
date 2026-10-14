@@ -8,14 +8,14 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, h_flex,
     hover_card::HoverCard,
-    menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt as _, PopupMenu},
     v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::REFS_W;
-use crate::workspace::components::branches::{branch_menu, remote_branch_menu};
+use crate::workspace::components::branches::{branch_menu, remote_branch_menu, tag_menu};
 use crate::workspace::{CommitRef, CommitRefKind, Workspace};
 use grit_core::Oid;
 use grit_core::branch::BranchType;
@@ -137,28 +137,4 @@ fn ref_menu(
         CommitRefKind::Remote => remote_branch_menu(menu, &r.name, workspace, cx),
         CommitRefKind::Tag => tag_menu(menu, &r.name, workspace, cx),
     }
-}
-
-/// Right-click actions on a tag chip: publish it, or delete it (remote
-/// copy first, then the local ref, behind a confirm dialog).
-fn tag_menu(
-    mut menu: PopupMenu,
-    name: &str,
-    workspace: &WeakEntity<Workspace>,
-    _cx: &mut Context<PopupMenu>,
-) -> PopupMenu {
-    let name: String = name.to_owned();
-    menu = menu.item(PopupMenuItem::new("Push tag").icon(IconName::Upload).on_click({
-        let workspace = workspace.clone();
-        let name = name.clone();
-        move |_, _, cx| {
-            workspace.update(cx, |ws, cx| ws.push_tag(&name, cx)).ok();
-        }
-    }));
-    menu.item(PopupMenuItem::new("Delete tag…").icon(IconName::Trash).on_click({
-        let workspace = workspace.clone();
-        move |_, window, cx| {
-            workspace.update(cx, |ws, cx| ws.open_tag_delete_dialog(&name, window, cx)).ok();
-        }
-    }))
 }

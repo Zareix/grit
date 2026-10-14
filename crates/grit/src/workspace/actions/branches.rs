@@ -107,7 +107,7 @@ impl Workspace {
         }
     }
 
-    /// Push a tag to the first configured remote (`git push <remote>
+    /// Push a tag to the first configured remote (`git push <remote>`
     /// <tag>`; origin wins when several are configured). The release is
     /// published through the same credential story as branch pushes.
     pub(crate) fn push_tag(&mut self, name: &str, cx: &mut Context<Self>) {

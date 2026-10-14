@@ -1,15 +1,16 @@
 //! Left column: local / remote branches.
 //!
-//! Click a branch to scroll the commit log to its tip (no checkout). The
-//! menu button, revealed on hover, gives checkout / pull / set-upstream /
-//! delete; the same menu is available on right-click (context menu).
-//! Remotes render as a GitKraken-style tree (one root per remote, a folder
+//! Click a branch to scroll the commit log to its tip (no checkout). Menu
+//! buttons (revealed on hover) and right-clicks carry the actions; tags
+//! get the same row pattern (a `TAGS` section, [`tag_row`]). Remotes
+//! render as a GitKraken-style tree (one root per remote, a folder
 //! per `/` segment) whose leaves offer checkout (as a tracking local
 //! branch) and delete on the server, via right-click. See
 //! [`remote_tree`] and [`stashes`] for those two panels.
 
 mod remote_tree;
 mod stashes;
+pub(crate) mod tags;
 
 pub(crate) use remote_tree::{prune_collapsed, remote_branch_menu, remote_tree_items};
 
@@ -100,8 +101,9 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .child(SectionLabel::new("LOCAL", cx))
                 .children(local_rows),
         )
-        // remotes + stashes: vertical resizable pair (remotes fills, stash
-        // panel is capped and only visible when there are stashes).
+        // remotes + tags + stashes: the bottom resizable group (remotes
+        // fills; tags and stashes are capped panels, only visible with
+        // content).
         .child(
             v_flex().flex_1().min_h_0().mt_1().child(
                 v_resizable("bottom-left")
@@ -114,6 +116,13 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                                 .child(div().px_1().child(SectionLabel::new("REMOTES", cx)))
                                 .child(remote_tree::render_remote_tree(ws, cx)),
                         ),
+                    )
+                    .child(
+                        resizable_panel()
+                            .size(px(140.))
+                            .size_range(tags::TAGS_MIN_SIZE..px(320.))
+                            .visible(!ws.tags.is_empty())
+                            .child(tags::render_tags(ws, cx)),
                     )
                     .child(
                         resizable_panel()
@@ -206,6 +215,11 @@ fn branch_row_shell(
     .into_any_element()
 }
 
+// ---- tags ---------------------------------------------------------------
+
+// Row rendering lives in [`tags`] (panel like stashes); the shared menu
+// builder `tag_menu` stays here for both the panel and the log's chips.
+
 pub(crate) fn branch_menu(
     mut menu: PopupMenu,
     branch: &Branch,
@@ -269,6 +283,30 @@ pub(crate) fn branch_menu(
 
     // The menu is anchored under the row; text weight is inherited deliberately.
     menu
+}
+
+/// Right-click / menu-button actions on a tag: publish it, or delete it
+/// (remote copy first, then the local ref, behind a confirm dialog).
+pub(crate) fn tag_menu(
+    mut menu: PopupMenu,
+    name: &str,
+    workspace: &WeakEntity<Workspace>,
+    _cx: &mut App,
+) -> PopupMenu {
+    let name: String = name.to_owned();
+    menu = menu.item(PopupMenuItem::new("Push tag").icon(IconName::Upload).on_click({
+        let workspace = workspace.clone();
+        let name = name.clone();
+        move |_, _, cx| {
+            workspace.update(cx, |ws, cx| ws.push_tag(&name, cx)).ok();
+        }
+    }));
+    menu.item(PopupMenuItem::new("Delete tag…").icon(IconName::Trash).on_click({
+        let workspace = workspace.clone();
+        move |_, window, cx| {
+            workspace.update(cx, |ws, cx| ws.open_tag_delete_dialog(&name, window, cx)).ok();
+        }
+    }))
 }
 
 /// Ahead/behind-coherent integration entries for a branch context menu,

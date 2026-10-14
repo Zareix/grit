@@ -123,7 +123,11 @@ impl Workspace {
         self.status = snapshot.status;
         self.branches = snapshot.branches;
         self.current_branch = snapshot.current_branch;
-        self.tags = snapshot.tags;
+        // Most-recent-first drives the sidebar listing and the chip order
+        // (stable sort: the sidebar also wants alphabetical on ties).
+        let mut tags = snapshot.tags;
+        tags.sort_by_key(|t| std::cmp::Reverse(t.date));
+        self.tags = tags;
         self.log = snapshot.log;
         self.stashes = snapshot.stashes;
         self.branch_relations = snapshot.branch_relations;
@@ -199,15 +203,31 @@ impl Workspace {
         let Some(tip) = self.branches.iter().find(|b| b.name == name).map(|b| b.head) else {
             return;
         };
-        match self.log.iter().position(|c| c.id == tip) {
+        self.reveal_commit(name, tip, cx);
+    }
+
+    /// Scroll the log to the commit the named tag points at.
+    pub(crate) fn reveal_tag(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(target) = self.tags.iter().find(|t| t.name == name).map(|t| t.target) else {
+            return;
+        };
+        self.reveal_commit(name, target, cx);
+    }
+
+    /// Shared scroll-to-oid with the "older than window" note.
+    fn reveal_commit(&mut self, name: &str, oid: Oid, cx: &mut Context<Self>) {
+        match self.log.iter().position(|c| c.id == oid) {
             Some(ix) => {
                 self.log_scroll.scroll_to_item(ix, ScrollStrategy::Center);
                 cx.notify();
             }
             None => {
                 self.info = Some(
-                    format!("\"{name}\" tip is older than the {MAX_LOG_COMMITS} commits shown")
-                        .into(),
+                    format!(
+                        "\"{name}\" is older than the {MAX_LOG_COMMITS} \
+                                          commits shown"
+                    )
+                    .into(),
                 );
                 cx.notify();
             }

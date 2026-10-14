@@ -11,6 +11,9 @@ pub struct Tag {
     pub name: String,
     /// The commit the tag points to (peeled through annotated tags).
     pub target: Oid,
+    /// Commit time (epoch seconds) of the target commit, for
+    /// most-recent-first listings.
+    pub date: i64,
 }
 
 impl Repo {
@@ -27,11 +30,9 @@ impl Repo {
             }
             // Peel annotated tags down to the commit; unresolved targets are
             // skipped rather than surfaced as dangling entries.
-            let target = match reference.peel_to_commit() {
-                Ok(commit) => commit.id(),
-                Err(_) => continue,
-            };
-            out.push(Tag { name: name.to_owned(), target });
+            let Ok(commit) = reference.peel_to_commit() else { continue };
+            let date = commit.time().seconds();
+            out.push(Tag { name: name.to_owned(), target: commit.id(), date });
         }
 
         out.sort_by(|a, b| a.name.cmp(&b.name));

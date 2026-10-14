@@ -273,7 +273,6 @@ impl Workspace {
                 this.remote_collapsed.remove(id.as_ref());
             }
         });
-
         let mut this = Self {
             repo: None,
             status: Status::default(),

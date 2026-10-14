@@ -113,6 +113,12 @@ fn commit_row(
             }
         })
         // refs | graph | title | author | date
+        // The commit-context menu lives on the cells AROUND the refs
+        // (not on the whole row): the ref chips carry their own menus,
+        // and two nested `context_menu` elements both open on a
+        // right-click — stacking the chip's menu under the row's at the
+        // same position. Right-clicks on the refs cell itself (gaps)
+        // open nothing.
         .child(refs::ref_chips(refs, oid, workspace, cx))
         // Graph lane placeholder: a plain node dot; the real graph (edges,
         // lanes) comes later.
@@ -131,33 +137,43 @@ fn commit_row(
                 .min_w_0()
                 .truncate()
                 .text_color(foreground)
+                .context_menu({
+                    let workspace = workspace.clone();
+                    let summary = commit.summary.clone();
+                    move |menu, _, _| commit_menu(menu, oid, &summary, &workspace)
+                })
                 .child(commit.summary.clone()),
         )
         .child(
-            div()
+            h_flex()
                 .flex_none()
-                .w(px(AUTHOR_W))
-                .min_w_0()
-                .truncate()
-                .text_size(px(11.))
-                .text_color(muted)
-                .child(commit.author.name.clone()),
+                .gap_3()
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(AUTHOR_W))
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(muted)
+                        .child(commit.author.name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(DATE_W))
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(muted)
+                        .child(commit.author.date_time()),
+                )
+                .context_menu({
+                    let workspace = workspace.clone();
+                    let summary = commit.summary.clone();
+                    move |menu, _, _| commit_menu(menu, oid, &summary, &workspace)
+                }),
         )
-        .child(
-            div()
-                .flex_none()
-                .w(px(DATE_W))
-                .min_w_0()
-                .truncate()
-                .text_size(px(11.))
-                .text_color(muted)
-                .child(commit.author.date_time()),
-        )
-        .context_menu({
-            let workspace = workspace.clone();
-            let summary = commit.summary.clone();
-            move |menu, _, _| commit_menu(menu, oid, &summary, &workspace)
-        })
         .into_any_element()
 }
 
