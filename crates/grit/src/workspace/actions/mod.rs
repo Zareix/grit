@@ -294,9 +294,7 @@ impl Workspace {
         self.sync_remote_tree(cx);
         self.sync_remote_tags(cx);
         self.error = None;
-        if let Some(repo) = self.repo.clone() {
-            self.sync_selection(&repo, cx);
-        }
+        self.sync_selection(cx);
     }
 
     /// Drop the selection's files that left the selected staging side:
@@ -541,35 +539,63 @@ impl Workspace {
         }
     }
 
-    /// Install a freshly produced patch in the diff viewer. An identical
-    /// patch (the auto-refresh re-reads the selected file every interval)
-    /// is skipped: `DiffState::set_files` resets scroll, expansion and
-    /// selection, so re-pushing the same content would jump the view back
-    /// to the top on every refresh.
-    pub(crate) fn set_diff(&mut self, result: grit_core::Result<String>, cx: &mut Context<Self>) {
-        match result {
-            Ok(patch) => {
-                if self.diff_patch.as_deref() == Some(patch.as_str()) {
-                    return;
+    /// Compute a patch off the UI thread — git read *and* `DiffFile::parse`
+    /// — and install it in the diff viewer when it lands. Both steps can
+    /// take tens of milliseconds on real patches; a stale result (the
+    /// selection or the diff target changed meanwhile) is dropped. An
+    /// identical patch (the auto-refresh re-reads the selected file every
+    /// interval) is skipped: `DiffState::set_files` resets scroll,
+    /// expansion and selection, so re-pushing the same content would jump
+    /// the view back to the top on every refresh.
+    pub(crate) fn request_diff(
+        &mut self,
+        compute: impl FnOnce(&Repo) -> grit_core::Result<String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = self.repo.clone() else { return };
+        self.diff_seq += 1;
+        let seq = self.diff_seq;
+        let job = cx.background_spawn(async move {
+            compute(&repo).map(|patch| match DiffFile::parse(&patch) {
+                Ok(files) => Ok((patch, files)),
+                // `DiffFile::parse` has its own error type; the landing
+                // side only displays it.
+                Err(e) => Err(e.to_string()),
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                if seq != this.diff_seq {
+                    return; // superseded request
                 }
-                match DiffFile::parse(&patch) {
-                    Ok(files) => {
-                        self.diff.update(cx, |state, cx| state.set_files(files, cx));
-                        self.diff_patch = Some(patch);
+                match result {
+                    Ok(Ok((patch, files))) => {
+                        if this.diff_patch.as_deref() != Some(patch.as_str()) {
+                            this.diff.update(cx, |state, cx| state.set_files(files, cx));
+                            this.diff_patch = Some(patch);
+                        }
                     }
-                    Err(e) => self.error = Some(e.to_string().into()),
+                    Err(e) => {
+                        this.error = Some(e.to_string().into());
+                        this.clear_diff(cx);
+                    }
+                    Ok(Err(msg)) => {
+                        this.error = Some(msg.into());
+                        this.clear_diff(cx);
+                    }
                 }
-            }
-            Err(e) => {
-                self.error = Some(e.to_string().into());
-                self.clear_diff(cx);
-            }
-        };
-        cx.notify();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
-    /// Show the empty diff viewer (no file selected).
+    /// Show the empty diff viewer (no file selected). Bumps the diff
+    /// generation so an in-flight patch cannot land into a cleared viewer.
     pub(crate) fn clear_diff(&mut self, cx: &mut Context<Self>) {
+        self.diff_seq += 1;
         self.diff_patch = None;
         self.diff.update(cx, |state, cx| state.set_files([], cx));
     }

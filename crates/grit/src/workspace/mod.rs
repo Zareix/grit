@@ -248,6 +248,10 @@ pub struct Workspace {
     /// skips re-installing an identical patch (a routine auto-refresh
     /// re-reads the same file) so scroll, expansion and selection stay put.
     diff_patch: Option<String>,
+    /// Generation counter bumped when a diff request is issued or the diff
+    /// target changes; a background patch computed from a superseded
+    /// request is dropped instead of clobbering the viewer.
+    diff_seq: u64,
     error: Option<SharedString>,
     /// Auto-updater state, surfaced in the status bar (see `UpdateState`).
     update_state: UpdateState,
@@ -350,6 +354,7 @@ impl Workspace {
             log_scroll: UniformListScrollHandle::new(),
             selected_commit: None,
             refresh_seq: 0,
+            diff_seq: 0,
             commit_files: Vec::new(),
             diff_from_commit: false,
             diff_open: false,

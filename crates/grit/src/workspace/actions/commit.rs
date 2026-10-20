@@ -5,14 +5,16 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::*;
-use grit_core::{Oid, Repo, status::FileEntry};
+use grit_core::{Oid, status::FileEntry};
 
 use crate::workspace::Workspace;
 
 impl Workspace {
     /// Re-read the selected file's diff after the status changed; drop the
-    /// selection when the file disappeared from both sections.
-    pub(crate) fn sync_selection(&mut self, repo: &Repo, cx: &mut Context<Self>) {
+    /// selection when the file disappeared from both sections. Runs on the
+    /// UI thread after a snapshot lands; the diff computation itself is
+    /// backgrounded by `request_diff`.
+    pub(crate) fn sync_selection(&mut self, cx: &mut Context<Self>) {
         let Some(sel) = self.selected_path.clone() else {
             return;
         };
@@ -22,8 +24,13 @@ impl Workspace {
             if self.commit_files.iter().any(|f| f.path == sel) {
                 self.diff_from_commit = true;
                 self.selected_staged = false;
-                let result = repo.commit_file_diff(commit.id, &sel);
-                self.set_diff(result, cx);
+                self.request_diff(
+                    {
+                        let sel = sel.clone();
+                        move |repo| repo.commit_file_diff(commit.id, &sel)
+                    },
+                    cx,
+                );
                 return;
             }
             // File no longer part of the commit view: clear it.
@@ -42,8 +49,15 @@ impl Workspace {
         if present {
             self.selected_staged = staged;
             self.diff_from_commit = false;
-            let result = if staged { repo.diff_staged(&sel) } else { repo.diff_unstaged(&sel) };
-            self.set_diff(result, cx);
+            self.request_diff(
+                {
+                    let sel = sel.clone();
+                    move |repo| {
+                        if staged { repo.diff_staged(&sel) } else { repo.diff_unstaged(&sel) }
+                    }
+                },
+                cx,
+            );
         } else {
             self.selected_path = None;
             self.selected_staged = false;
@@ -119,13 +133,14 @@ impl Workspace {
         staged: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(repo) = self.repo.clone() else { return };
         self.show_diff_panel(cx);
         self.selected_path = Some(path.clone());
         self.selected_staged = staged;
         self.diff_from_commit = false;
-        let result = if staged { repo.diff_staged(&path) } else { repo.diff_unstaged(&path) };
-        self.set_diff(result, cx);
+        self.request_diff(
+            move |repo| if staged { repo.diff_staged(&path) } else { repo.diff_unstaged(&path) },
+            cx,
+        );
         cx.notify();
     }
 
@@ -133,13 +148,11 @@ impl Workspace {
     /// file's diff extracted from the selected commit.
     pub(crate) fn select_commit_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let Some(commit) = self.selected_commit.clone() else { return };
-        let Some(repo) = self.repo.clone() else { return };
         self.show_diff_panel(cx);
         self.selected_path = Some(path.clone());
         self.selected_staged = false;
         self.diff_from_commit = true;
-        let result = repo.commit_file_diff(commit.id, &path);
-        self.set_diff(result, cx);
+        self.request_diff(move |repo| repo.commit_file_diff(commit.id, &path), cx);
         cx.notify();
     }
 
