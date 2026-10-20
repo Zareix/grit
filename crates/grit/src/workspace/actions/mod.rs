@@ -92,6 +92,24 @@ impl RepoSnapshot {
             branch_relations,
         })
     }
+
+    /// Whether this snapshot would change any rendered field. A snapshot
+    /// that matches the state already on screen is dropped wholesale: no
+    /// redraw, no derived rebuilds, no selected-file diff re-read.
+    fn same_state(&self, ws: &Workspace) -> bool {
+        // `tags` is sorted by date on apply; compare the sorted form.
+        let mut tags = self.tags.clone();
+        tags.sort_by_key(|t| std::cmp::Reverse(t.date));
+        tags == ws.tags
+            && self.status == ws.status
+            && self.branches == ws.branches
+            && self.current_branch == ws.current_branch
+            && self.graph == ws.graph
+            && self.log == ws.log
+            && self.stashes == ws.stashes
+            && self.stash_commits == ws.stash_commits
+            && self.branch_relations == ws.branch_relations
+    }
 }
 
 impl Workspace {
@@ -260,13 +278,18 @@ impl Workspace {
             let snapshot = job.await;
             this.update(cx, |this, cx| {
                 match snapshot {
-                    Ok(snapshot) if seq == this.refresh_seq => this.apply_snapshot(snapshot, cx),
+                    Ok(snapshot) if seq == this.refresh_seq => {
+                        // An unchanged snapshot re-renders nothing.
+                        if this.apply_snapshot(snapshot, cx) {
+                            cx.notify();
+                        }
+                    }
                     Err(_) if seq == this.refresh_seq => {
                         this.error = Some("Failed to read repository state".into());
+                        cx.notify();
                     }
                     _ => {} // stale snapshot: a newer refresh superseded it
                 }
-                cx.notify();
             })
             .ok();
         })
@@ -274,8 +297,19 @@ impl Workspace {
     }
 
     /// Apply a freshly read snapshot: cached fields, then the derived
-    /// state, then the selection sync against the new status.
-    fn apply_snapshot(&mut self, snapshot: RepoSnapshot, cx: &mut Context<Self>) {
+    /// state, then the selection sync against the new status. Returns
+    /// whether any rendered field changed; callers skip their redraw when
+    /// nothing did (a routine auto-refresh on an idle repo re-renders
+    /// nothing at all).
+    fn apply_snapshot(&mut self, snapshot: RepoSnapshot, cx: &mut Context<Self>) -> bool {
+        if snapshot.same_state(self) {
+            // Still re-read the selected file's diff in the background: an
+            // untracked file can change content while keeping its status
+            // bit, and an open commit-file diff is cheap to re-check. The
+            // patch-identity check keeps an unchanged diff from redrawing.
+            self.sync_selection(cx);
+            return false;
+        }
         self.status = snapshot.status;
         self.branches = snapshot.branches;
         self.current_branch = snapshot.current_branch;
@@ -295,6 +329,7 @@ impl Workspace {
         self.sync_remote_tags(cx);
         self.error = None;
         self.sync_selection(cx);
+        true
     }
 
     /// Drop the selection's files that left the selected staging side:
@@ -574,18 +609,20 @@ impl Workspace {
                         if this.diff_patch.as_deref() != Some(patch.as_str()) {
                             this.diff.update(cx, |state, cx| state.set_files(files, cx));
                             this.diff_patch = Some(patch);
+                            cx.notify();
                         }
                     }
                     Err(e) => {
                         this.error = Some(e.to_string().into());
                         this.clear_diff(cx);
+                        cx.notify();
                     }
                     Ok(Err(msg)) => {
                         this.error = Some(msg.into());
                         this.clear_diff(cx);
+                        cx.notify();
                     }
                 }
-                cx.notify();
             })
             .ok();
         })
@@ -598,6 +635,7 @@ impl Workspace {
         self.diff_seq += 1;
         self.diff_patch = None;
         self.diff.update(cx, |state, cx| state.set_files([], cx));
+        cx.notify();
     }
 
     /// Toggle the diff viewer between unified and side-by-side layout.

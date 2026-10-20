@@ -57,7 +57,7 @@ pub struct FileEntry {
 }
 
 /// Full status snapshot of the working tree.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Status {
     /// Between HEAD and the index (what will be committed).
     pub staged: Vec<FileEntry>,
