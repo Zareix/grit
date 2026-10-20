@@ -14,6 +14,7 @@ grit-core = { workspace = true }
 # queried on demand at runtime; the cost is one-time compile time + some
 # binary size. (No standalone `tree-sitter-json`: json is inside `tree-sitter`.)
 gpui-kit = { workspace = true, features = ["tree-sitter", "tree-sitter-languages"] }
+gpui-fps = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = { workspace = true }

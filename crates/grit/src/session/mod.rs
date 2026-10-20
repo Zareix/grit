@@ -312,6 +312,12 @@ fn tab_label(path: &Path) -> SharedString {
 }
 
 impl Session {
+    /// Whether the performance HUD (gpui-fps) is requested via GRIT_FPS=1.
+    fn fps_enabled() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var("GRIT_FPS").is_ok_and(|v| v == "1"))
+    }
+
     /// Tab strip drawn inside the title bar: left of it sit the native window
     /// buttons (TitleBar applies the 80px macOS padding), tabs align on the
     /// same row.
@@ -376,7 +382,7 @@ impl Session {
 }
 
 impl Render for Session {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active.min(self.tabs.len() - 1);
         // Active tab content is computed before the title bar so the borrows
         // of `self` never overlap.
@@ -386,7 +392,7 @@ impl Render for Session {
             _ => self.render_new_tab(active, &owner, cx),
         };
 
-        div()
+        let root = div()
             .flex()
             .flex_col()
             .size_full()
@@ -395,6 +401,14 @@ impl Render for Session {
             // ---- title bar with the tab strip ----
             .child(TitleBar::new().child(self.render_tab_strip(cx)))
             // ---- active tab content ----
-            .child(div().flex_1().min_h_0().child(content))
+            .child(div().flex_1().min_h_0().child(content));
+
+        // Opt-in perf HUD (GRIT_FPS=1): FRAME/P95/DROP/INV + CPU/GPU/MEM.
+        // The overlay needs a positioned ancestor to pin to the window edge.
+        if Self::fps_enabled() {
+            root.relative().child(gpui_fps::fps_monitor(window, cx))
+        } else {
+            root
+        }
     }
 }
