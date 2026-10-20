@@ -17,7 +17,8 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use notify::{Event, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 
 use crate::error::{Error, Result};
 use crate::repo::Repo;
@@ -86,7 +87,11 @@ pub fn wait_batch(events: &WatchEvents, repo: &Repo) -> WatchBatch {
         let mut paths: HashSet<PathBuf> = HashSet::new();
         loop {
             match rx.recv_timeout(QUIET) {
-                Ok(Ok(event)) => paths.extend(event.paths.iter().cloned()),
+                Ok(Ok(event)) => {
+                    if modification(&event) {
+                        paths.extend(event.paths.iter().cloned());
+                    }
+                }
                 // Watcher internal error (e.g. a watched dir was removed and
                 // re-added): harmless, nothing to do.
                 Ok(Err(_)) => {}
@@ -98,6 +103,20 @@ pub fn wait_batch(events: &WatchEvents, repo: &Repo) -> WatchBatch {
             return WatchBatch::Changed;
         }
         // Unrelated batch: keep waiting on the same parked thread.
+    }
+}
+
+/// Whether the event kind indicates a modification. Reads (Open, Read,
+/// Close(Read)) are not: notify's inotify backend reports them, and the
+/// ignore filter itself opens `.gitignore` to evaluate its rules — without
+/// this gate every filter pass would feed the watcher back an event for
+/// `.gitignore` (not ignored) and refresh forever. Unknown kinds are
+/// treated as modifications: a missed refresh is worse than a spurious one.
+fn modification(event: &Event) -> bool {
+    match &event.kind {
+        EventKind::Access(access) => matches!(access, AccessKind::Close(AccessMode::Write)),
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => true,
+        EventKind::Any | EventKind::Other => true,
     }
 }
 
