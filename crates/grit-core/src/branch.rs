@@ -36,6 +36,9 @@ pub fn full_ref(kind: BranchType, name: &str) -> String {
 /// (commits unique to `a`, commits unique to `b`).
 pub type AheadBehindMap = HashMap<Oid, HashMap<Oid, (usize, usize)>>;
 
+/// Tips per paint pass: a commit's reachability mask is one `u64`.
+const PAINT_CHUNK: usize = u64::BITS as usize;
+
 impl Repo {
     /// All branches, local first, sorted by name.
     pub fn branches(&self) -> Result<Vec<Branch>> {
@@ -190,23 +193,149 @@ impl Repo {
     /// heads), keyed by tip OID. `relations[a][b]` counts commits unique to
     /// `a`, then commits unique to `b`. Duplicate OIDs are collapsed; a tip
     /// compared with itself stays (0, 0).
+    ///
+    /// Instead of one `graph_ahead_behind` walk per pair (O(n²) full walks),
+    /// one topological walk paints every commit with the bit-set of tips
+    /// that reach it, then every pair count is derived from those masks:
+    /// `ahead(a, b)` is the number of painted commits carrying `a`'s bit
+    /// but not `b`'s. Walks are chunked 64 tips at a time (the mask width);
+    /// commits absent from a chunk's map are reachable from none of its
+    /// tips. Pairs count over distinct masks only — commits on a shared
+    /// linear segment all carry the same mask, so the histogram stays small.
     pub fn ahead_behind_all(&self, tips: &[Oid]) -> Result<AheadBehindMap> {
-        let repo = self.git2()?;
         let mut tips = tips.to_vec();
         tips.sort_unstable();
         tips.dedup();
-        let mut out: AheadBehindMap = HashMap::new();
-        for (i, &a) in tips.iter().enumerate() {
-            for &b in tips.iter().skip(i + 1) {
-                let counts = repo.graph_ahead_behind(a, b)?;
-                out.entry(b).or_default().insert(a, (counts.1, counts.0));
-                out.entry(a).or_default().insert(b, counts);
+        let mut out: AheadBehindMap = HashMap::with_capacity(tips.len());
+        if tips.is_empty() {
+            return Ok(out);
+        }
+
+        // Single pair: git2's own walk is cheaper than the paint pass (it
+        // stops at the merge base instead of walking the whole DAG).
+        if tips.len() == 2 {
+            let counts = self.git2()?.graph_ahead_behind(tips[0], tips[1])?;
+            put_pair(&mut out, tips[0], tips[1], counts.0, counts.1);
+            out.entry(tips[0]).or_default().insert(tips[0], (0, 0));
+            out.entry(tips[1]).or_default().insert(tips[1], (0, 0));
+            return Ok(out);
+        }
+
+        let chunks: Vec<&[Oid]> = tips.chunks(PAINT_CHUNK).collect();
+        let painted: Vec<HashMap<Oid, u64>> =
+            chunks.iter().map(|chunk| self.paint_reachability(chunk)).collect::<Result<_>>()?;
+        // Distinct-mask histogram per chunk.
+        let histograms: Vec<HashMap<u64, usize>> = painted
+            .iter()
+            .map(|masks| {
+                let mut histogram: HashMap<u64, usize> = HashMap::new();
+                for mask in masks.values() {
+                    *histogram.entry(*mask).or_default() += 1;
+                }
+                histogram
+            })
+            .collect();
+
+        for (g, chunk) in chunks.iter().enumerate() {
+            // Same-chunk pairs, straight from that chunk's histogram.
+            for i in 0..chunk.len() {
+                for j in i + 1..chunk.len() {
+                    let mut ahead = 0;
+                    let mut behind = 0;
+                    for (&mask, &count) in &histograms[g] {
+                        let in_a = mask >> i & 1 == 1;
+                        let in_b = mask >> j & 1 == 1;
+                        if in_a && !in_b {
+                            ahead += count;
+                        } else if in_b && !in_a {
+                            behind += count;
+                        }
+                    }
+                    let (a, b) = (chunk[i], chunk[j]);
+                    put_pair(&mut out, a, b, ahead, behind);
+                }
+            }
+
+            // Cross-chunk pairs use the joint mask distribution of the two
+            // chunks (a in the earlier chunk, b in the later one).
+            for (h, later) in chunks.iter().enumerate().skip(g + 1) {
+                let joint = joint_histogram(&painted[g], &painted[h]);
+                for (i, &a) in chunk.iter().enumerate() {
+                    for (j, &b) in later.iter().enumerate() {
+                        let mut ahead = 0;
+                        let mut behind = 0;
+                        for (&(mask_a, mask_b), &count) in &joint {
+                            let in_a = mask_a >> i & 1 == 1;
+                            let in_b = mask_b >> j & 1 == 1;
+                            if in_a && !in_b {
+                                ahead += count;
+                            } else if in_b && !in_a {
+                                behind += count;
+                            }
+                        }
+                        put_pair(&mut out, a, b, ahead, behind);
+                    }
+                }
             }
         }
-        for &t in &tips {
-            let row = out.entry(t).or_default();
-            row.entry(t).or_insert((0, 0)); // self-comparison is always equal
+
+        // Self-comparison is always equal.
+        for &tip in &tips {
+            out.entry(tip).or_default().insert(tip, (0, 0));
         }
         Ok(out)
     }
+
+    /// For every commit reachable from any of `tips`, the bit-set of tips
+    /// that reach it (a tip carries its own bit). One topological walk —
+    /// children before parents — so a single forward pass accumulates each
+    /// child's finished mask into its parents.
+    fn paint_reachability(&self, tips: &[Oid]) -> Result<HashMap<Oid, u64>> {
+        let repo = self.git2()?;
+        let mut walk = repo.revwalk()?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL)?;
+        for tip in tips {
+            walk.push(*tip)?;
+        }
+
+        let mut masks: HashMap<Oid, u64> = HashMap::new();
+        // Masks propagated from already-painted children, keyed by parent.
+        let mut incoming: HashMap<Oid, u64> = HashMap::new();
+        for oid in walk {
+            let oid = oid?;
+            let mut mask = incoming.remove(&oid).unwrap_or(0);
+            if let Some(bit) = tips.iter().position(|tip| *tip == oid) {
+                mask |= 1 << bit;
+            }
+            let commit = repo.find_commit(oid)?;
+            for parent in commit.parent_ids() {
+                *incoming.entry(parent).or_default() |= mask;
+            }
+            masks.insert(oid, mask);
+        }
+        Ok(masks)
+    }
+}
+
+/// Store a pair result and its mirrored row: `relations[a][b]` =
+/// (unique to `a`, unique to `b`), `relations[b][a]` the other way round.
+fn put_pair(out: &mut AheadBehindMap, a: Oid, b: Oid, ahead: usize, behind: usize) {
+    out.entry(a).or_default().insert(b, (ahead, behind));
+    out.entry(b).or_default().insert(a, (behind, ahead));
+}
+
+/// Joint distribution of two chunks' painted masks over the union of their
+/// commits. A commit present in only one map is reachable from none of the
+/// other chunk's tips — it counts with mask 0 there.
+fn joint_histogram(a: &HashMap<Oid, u64>, b: &HashMap<Oid, u64>) -> HashMap<(u64, u64), usize> {
+    let mut joint: HashMap<(u64, u64), usize> = HashMap::new();
+    for (&oid, &mask_a) in a {
+        *joint.entry((mask_a, b.get(&oid).copied().unwrap_or(0))).or_default() += 1;
+    }
+    for (&oid, &mask_b) in b {
+        if !a.contains_key(&oid) {
+            *joint.entry((0, mask_b)).or_default() += 1;
+        }
+    }
+    joint
 }

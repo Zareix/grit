@@ -249,3 +249,77 @@ fn ahead_behind_all_tracks_ancestry() {
     assert_eq!(total_behind, 1, "main is one ahead");
     assert_eq!(behind.head, tip_before);
 }
+
+/// Reference check: the single-pass paint must agree with git2's own
+/// pairwise `graph_ahead_behind` on every pair — including merge commits
+/// (a merge makes the merged branch's commits shared with the target).
+#[test]
+fn ahead_behind_all_matches_pairwise_reference_with_merges() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("c1");
+    t.repo.create_branch("feature").unwrap();
+
+    // main: c1 -> c2 -> (merge c3) -> c5; feature: c1 -> c3; side: at c2.
+    t.write_and_stage("m.txt", "m");
+    t.commit("c2");
+    t.repo.create_branch("side").unwrap();
+    t.repo.checkout_branch("feature").unwrap();
+    t.write_and_stage("f.txt", "f");
+    t.commit("c3");
+    t.repo.checkout_branch("main").unwrap();
+    t.cli(&["merge", "--no-ff", "-m", "merge feature", "feature"]);
+    t.write_and_stage("m2.txt", "m2");
+    t.commit("c5");
+
+    let heads = t.repo.branches().unwrap();
+    let tips: Vec<_> = heads.iter().map(|b| b.head).collect();
+    let relations = t.repo.ahead_behind_all(&tips).unwrap();
+
+    let git = git2::Repository::open(&t.repo.path).unwrap();
+    for (i, &a) in tips.iter().enumerate() {
+        for &b in tips.iter().skip(i + 1) {
+            let (ahead, behind) = git.graph_ahead_behind(a, b).unwrap();
+            assert_eq!(relations[&a][&b], (ahead, behind), "{} vs {}", a, b);
+            assert_eq!(relations[&b][&a], (behind, ahead), "mirrored {} {}", b, a);
+        }
+    }
+
+    // The merge really shares the feature commits: feature sees main as
+    // ahead by c2, the merge commit and c5 — c3 is shared, not re-counted.
+    let feature = heads.iter().find(|b| b.name == "feature").unwrap();
+    let main = heads.iter().find(|b| b.name == "main").unwrap();
+    assert_eq!(relations[&feature.head][&main.head], (0, 3));
+}
+
+/// Same reference check with more tips than one u64 paint mask (70
+/// branches force the chunked path: 64 + 6).
+#[test]
+fn ahead_behind_all_matches_pairwise_reference_beyond_64_tips() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("c1");
+
+    // Each branch is one unique commit on top of c1.
+    for i in 0..70 {
+        t.repo.create_branch(&format!("b{i}")).unwrap();
+        t.repo.checkout_branch(&format!("b{i}")).unwrap();
+        t.write_and_stage(&format!("f{i}.txt"), "x");
+        t.commit(&format!("c b{i}"));
+    }
+    t.repo.checkout_branch("main").unwrap();
+
+    let heads = t.repo.branches().unwrap();
+    assert!(heads.len() > 64);
+    let tips: Vec<_> = heads.iter().map(|b| b.head).collect();
+    let relations = t.repo.ahead_behind_all(&tips).unwrap();
+
+    let git = git2::Repository::open(&t.repo.path).unwrap();
+    for (i, &a) in tips.iter().enumerate() {
+        for &b in tips.iter().skip(i + 1) {
+            let (ahead, behind) = git.graph_ahead_behind(a, b).unwrap();
+            assert_eq!(relations[&a][&b], (ahead, behind), "{} vs {}", a, b);
+            assert_eq!(relations[&b][&a], (behind, ahead), "mirrored {} {}", b, a);
+        }
+    }
+}
