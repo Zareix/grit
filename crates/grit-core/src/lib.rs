@@ -12,6 +12,7 @@ pub mod repo;
 pub mod stash;
 pub mod status;
 pub mod tags;
+pub mod watcher;
 
 pub use branch::Branch;
 pub use commit::Commit;

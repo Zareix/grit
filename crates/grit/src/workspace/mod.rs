@@ -247,6 +247,20 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Auto-updater state, surfaced in the status bar (see `UpdateState`).
     update_state: UpdateState,
+    /// Whether the auto-refresh timer loop is running (one per Workspace).
+    auto_refresh_started: bool,
+    /// When the last automatic refresh was triggered; compared against the
+    /// Settings interval on every tick.
+    last_auto_refresh: Option<std::time::Instant>,
+    /// When the last background fetch was attempted; throttles both the
+    /// periodic auto-fetch and the fetch on window re-activation.
+    last_fetch: Option<std::time::Instant>,
+    /// Worktree + `.git` watcher feeding refreshes as files change on disk.
+    /// `None` when it could not be created (polling still covers the state).
+    watcher: Option<grit_core::watcher::RepoWatcher>,
+    /// Whether a watcher wait chain is currently parked (one at a time; the
+    /// next tick re-arms).
+    watcher_armed: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -286,6 +300,14 @@ impl Workspace {
             }
             TreeEvent::Expanded(id) => {
                 this.remote_collapsed.remove(id.as_ref());
+            }
+        });
+        // Re-check the repo when the window regains focus (branches and the
+        // worktree may have changed elsewhere: merges, greps, editor saves).
+        // The fetch stays throttled — a quick alt-tab must not hit the remote.
+        let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.on_window_activated(cx);
             }
         });
         let mut this = Self {
@@ -329,7 +351,17 @@ impl Workspace {
             diff_open: false,
             error: None,
             update_state: UpdateState::Idle,
-            _subscriptions: vec![enter_subscription, name_enter_subscription, tree_subscription],
+            auto_refresh_started: false,
+            last_auto_refresh: None,
+            last_fetch: None,
+            watcher: None,
+            watcher_armed: false,
+            _subscriptions: vec![
+                enter_subscription,
+                name_enter_subscription,
+                tree_subscription,
+                activation_subscription,
+            ],
         };
         this.open(path, cx);
         // Launch auto-check (throttled to once >> 24h; silent failures).

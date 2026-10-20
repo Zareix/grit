@@ -15,6 +15,7 @@ mod remote;
 mod update;
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::diff::{DiffFile, DiffMode};
 use gpui_kit::*;
@@ -25,6 +26,7 @@ use grit_core::{
     graph::GraphData,
     status::{FileEntry, Status},
     tags::Tag,
+    watcher::{RepoWatcher, wait_batch},
 };
 
 use super::{CommitRef, CommitRefKind, Stash, Workspace};
@@ -96,16 +98,141 @@ impl Workspace {
     pub(crate) fn open(&mut self, path: String, cx: &mut Context<Self>) {
         match Repo::open(&path) {
             Ok(repo) => {
+                let repo_path = repo.path.clone();
                 self.error = None;
                 self.repo = Some(repo);
+                // Watch the repo (worktree + .git) so status changes made
+                // outside Grit feed refreshes; falls back to polling only.
+                self.watcher = RepoWatcher::new(&repo_path).ok();
+                // The auto-refresh loop lives as long as this Workspace.
+                self.start_auto_refresh(cx);
                 self.refresh(cx);
             }
             Err(e) => {
                 self.repo = None;
+                self.watcher = None;
                 self.error = Some(format!("Failed to open \"{path}\": {e}").into());
                 cx.notify();
             }
         }
+    }
+
+    /// Start the auto-refresh timer loop — one per Workspace, idempotent.
+    /// One-second ticks: every tick reads the Settings controls live (so a
+    /// change in the Settings window applies at once) and runs whatever is
+    /// due: periodic refresh, auto-fetch, watcher arming.
+    pub(crate) fn start_auto_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.auto_refresh_started {
+            return;
+        }
+        self.auto_refresh_started = true;
+        // Cloned out of `cx`: the closure must own it ('static lifetime).
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Duration::from_secs(1)).await;
+                // An update failure means the Workspace was dropped: end the
+                // loop (the watcher ends with it, so its waiter does too).
+                let alive = this.update(cx, |this, cx| this.auto_refresh_tick(cx)).is_ok();
+                if !alive {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// One auto-refresh tick (1 s cadence).
+    fn auto_refresh_tick(&mut self, cx: &mut Context<Self>) {
+        if !crate::settings::auto_refresh_enabled(cx) {
+            return;
+        }
+        let now = Instant::now();
+        if self.last_auto_refresh.is_none_or(|t| {
+            now.duration_since(t) >= Duration::from_secs(crate::settings::auto_refresh_interval(cx))
+        }) {
+            self.last_auto_refresh = Some(now);
+            self.refresh(cx);
+        }
+        self.maybe_auto_fetch(now, cx);
+        self.service_watcher(cx);
+    }
+
+    /// Run the background `git fetch` when its interval is due. Skipped
+    /// entirely for repos without remotes (`git fetch` would just fail) and
+    /// while a manual remote op is running. A failed attempt still counts:
+    /// a dead remote (VPN off) must not cause a reconnect storm.
+    pub(crate) fn maybe_auto_fetch(&mut self, now: Instant, cx: &mut Context<Self>) {
+        let fetch_interval = crate::settings::auto_fetch_interval(cx);
+        if self.remote_busy.is_some() || fetch_interval == 0 {
+            return;
+        }
+        if self
+            .last_fetch
+            .is_some_and(|t| now.duration_since(t) < Duration::from_secs(fetch_interval))
+        {
+            return;
+        }
+        let Some(repo) = self.repo.clone() else { return };
+        if repo.remotes().map(|r| r.is_empty()).unwrap_or(true) {
+            return;
+        }
+        self.last_fetch = Some(now);
+        self.silent_fetch(cx);
+    }
+
+    /// Network fetch that never touches the status bar: no busy label, no
+    /// info/error message; only the following refresh updates the UI.
+    fn silent_fetch(&mut self, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        let job = cx.background_spawn(async move { repo.run_git(&["fetch".to_string()]) });
+        cx.spawn(async move |this, cx| {
+            // Silently ignored: success refreshes through the snapshot, a
+            // failure (offline, locked worktree) retries on a later fetch.
+            let _ = job.await;
+            this.update(cx, |this, cx| this.refresh(cx)).ok();
+        })
+        .detach();
+    }
+
+    /// The window regained focus: refresh at once (cheap, local), fetch
+    /// only when its interval is due — see `maybe_auto_fetch`. Both are
+    /// part of auto-refresh, so they honor the Settings toggle too.
+    pub(crate) fn on_window_activated(&mut self, cx: &mut Context<Self>) {
+        if self.repo.is_none() || !crate::settings::auto_refresh_enabled(cx) {
+            return;
+        }
+        let now = Instant::now();
+        self.last_auto_refresh = Some(now);
+        self.refresh(cx);
+        self.maybe_auto_fetch(now, cx);
+    }
+
+    /// Arm one watcher wait chain (a single one at a time): a background
+    /// task blocks until the next on-disk change batch, then the UI
+    /// refreshes and the next tick re-arms the chain. When the Workspace
+    /// closes, its watcher drops and the parked task reports disconnect.
+    fn service_watcher(&mut self, cx: &mut Context<Self>) {
+        if self.watcher_armed {
+            return;
+        }
+        let Some(events) = self.watcher.as_ref().map(|w| w.events.clone()) else { return };
+        self.watcher_armed = true;
+        let job = cx.background_spawn(async move { wait_batch(&events) });
+        cx.spawn(async move |this, cx| {
+            let changed = job.await;
+            this.update(cx, |this, cx| {
+                this.watcher_armed = false;
+                if changed {
+                    // The fs watcher effectively IS a refresh trigger; count it
+                    // against the periodic interval to avoid a double reload.
+                    this.last_auto_refresh = Some(Instant::now());
+                    this.refresh(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Reload status, branches and commit log from disk. The read runs on

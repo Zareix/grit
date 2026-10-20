@@ -1,14 +1,14 @@
 //! App settings: global state + persistence, and the Settings window opened
 //! from the macOS menu bar ("Settings…", ⌘,).
 //!
-//! Currently holds the command the Agent toolbar shortcut runs in the Warp
-//! tab Grit generates (`warp://tab_config/grit-agent`).
+//! Holds the Agent launcher command and the background auto-refresh
+//! controls (toggle + status refresh / fetch intervals).
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::setting::{
-    SettingField, SettingGroup, SettingItem, SettingPage, Settings,
+    NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
 use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
@@ -18,19 +18,39 @@ use std::path::PathBuf;
 /// Command run in the launched Agent terminal tab.
 const DEFAULT_AGENT_COMMAND: &str = "opencode -c";
 
+/// Default seconds between background status reloads.
+const DEFAULT_AUTO_REFRESH_SECS: u32 = 10;
+/// Default seconds between background `git fetch`es.
+const DEFAULT_AUTO_FETCH_SECS: u32 = 300;
+/// Bounds of the auto-refresh interval (seconds).
+const MIN_AUTO_REFRESH_SECS: u32 = 2;
+const MAX_AUTO_REFRESH_SECS: u32 = 3_600;
+/// Hard ceiling of the auto-fetch interval (seconds; 0 disables fetching).
+const MAX_AUTO_FETCH_SECS: u32 = 86_400;
+
 /// App-wide settings, stored as a GPUI Global and persisted to
-/// `<data dir>/grit/settings.json`. Fields are agent-launcher related; the
-/// setters persist on every change.
+/// `<data dir>/grit/settings.json`. The setters persist on every change.
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct GritSettings {
     /// Command run in the Agent terminal tab.
     pub(crate) agent_command: String,
+    /// Whether status / branches / log reload periodically in the background.
+    pub(crate) auto_refresh_enabled: bool,
+    /// Seconds between background status reloads.
+    pub(crate) auto_refresh_interval_secs: u32,
+    /// Seconds between background `git fetch`es (0 = never).
+    pub(crate) auto_fetch_interval_secs: u32,
 }
 
 impl Default for GritSettings {
     fn default() -> Self {
-        Self { agent_command: DEFAULT_AGENT_COMMAND.into() }
+        Self {
+            agent_command: DEFAULT_AGENT_COMMAND.into(),
+            auto_refresh_enabled: true,
+            auto_refresh_interval_secs: DEFAULT_AUTO_REFRESH_SECS,
+            auto_fetch_interval_secs: DEFAULT_AUTO_FETCH_SECS,
+        }
     }
 }
 
@@ -54,6 +74,25 @@ pub(crate) fn agent_command(cx: &App) -> String {
         "" => DEFAULT_AGENT_COMMAND.to_string(),
         command => command.to_string(),
     }
+}
+
+/// Whether background auto-refresh (status + fetch + fs watcher) is on.
+pub(crate) fn auto_refresh_enabled(cx: &App) -> bool {
+    GritSettings::global(cx).auto_refresh_enabled
+}
+
+/// Seconds between background status reloads, clamped to the Settings UI's
+/// bounds (the accessor is the single place the loop reads the value, so a
+/// hand-edited settings.json cannot instantly re-tick 60 times a second).
+pub(crate) fn auto_refresh_interval(cx: &App) -> u64 {
+    (GritSettings::global(cx).auto_refresh_interval_secs as u64)
+        .clamp(MIN_AUTO_REFRESH_SECS as u64, MAX_AUTO_REFRESH_SECS as u64)
+}
+
+/// Seconds between background `git fetch`es (0 = never), clamped like the
+/// refresh interval.
+pub(crate) fn auto_fetch_interval(cx: &App) -> u64 {
+    (GritSettings::global(cx).auto_fetch_interval_secs as u64).min(MAX_AUTO_FETCH_SECS as u64)
 }
 
 /// Load persisted settings (defaults when the file is absent or invalid) and
@@ -112,28 +151,86 @@ impl Render for SettingsWindow {
         div().size_full().bg(cx.theme().background).text_color(cx.theme().foreground).child(
             Settings::new("grit-settings")
                 .with_group_variant(GroupBoxVariant::Outline)
-                .pages(vec![agent_page()]),
+                .pages(vec![general_page()]),
         )
     }
 }
 
-/// The "General" page: an Agent group with the launcher command.
-fn agent_page() -> SettingPage {
-    SettingPage::new("General").icon(IconName::Settings).resettable(true).group(
-        SettingGroup::new().title("Agent").item(
-            SettingItem::new(
-                "Command",
-                SettingField::input(
-                    |cx: &App| GritSettings::global(cx).agent_command.clone().into(),
-                    |val: SharedString, cx: &mut App| {
-                        GritSettings::global_mut(cx).agent_command = val.to_string();
-                        save(cx);
-                    },
-                )
-                .default_value(DEFAULT_AGENT_COMMAND),
+/// The "General" page: the Agent launcher, then the background auto-refresh
+/// controls.
+fn general_page() -> SettingPage {
+    SettingPage::new("General")
+        .icon(IconName::Settings)
+        .resettable(true)
+        .groups(vec![agent_group(), auto_refresh_group()])
+}
+
+/// The Agent launcher command.
+fn agent_group() -> SettingGroup {
+    SettingGroup::new().title("Agent").item(
+        SettingItem::new(
+            "Command",
+            SettingField::input(
+                |cx: &App| GritSettings::global(cx).agent_command.clone().into(),
+                |val: SharedString, cx: &mut App| {
+                    GritSettings::global_mut(cx).agent_command = val.to_string();
+                    save(cx);
+                },
             )
-            .description("Command run in the Grit Agent tab (`warp://tab_config/grit-agent`).")
-            .layout(Axis::Vertical),
-        ),
+            .default_value(DEFAULT_AGENT_COMMAND),
+        )
+        .description("Command run in the Grit Agent tab (`warp://tab_config/grit-agent`).")
+        .layout(Axis::Vertical),
     )
+}
+
+/// Background auto-refresh: toggle + refresh / fetch intervals.
+fn auto_refresh_group() -> SettingGroup {
+    SettingGroup::new().title("Auto-refresh").items(vec![
+        SettingItem::new(
+            "Auto refresh",
+            SettingField::switch(auto_refresh_enabled, |val: bool, cx: &mut App| {
+                GritSettings::global_mut(cx).auto_refresh_enabled = val;
+                save(cx);
+            }),
+        )
+        .description(
+            "Keep status, branches and the commit log in sync in the background \
+             (periodic reload, automatic fetches and file watching).",
+        ),
+        SettingItem::new(
+            "Status refresh interval",
+            SettingField::number_input(
+                NumberFieldOptions {
+                    min: MIN_AUTO_REFRESH_SECS as f64,
+                    max: MAX_AUTO_REFRESH_SECS as f64,
+                    ..Default::default()
+                },
+                |cx: &App| auto_refresh_interval(cx) as f64,
+                |val: f64, cx: &mut App| {
+                    GritSettings::global_mut(cx).auto_refresh_interval_secs =
+                        (val as u32).clamp(MIN_AUTO_REFRESH_SECS, MAX_AUTO_REFRESH_SECS);
+                    save(cx);
+                },
+            ),
+        )
+        .description("Seconds between background status reloads."),
+        SettingItem::new(
+            "Fetch interval",
+            SettingField::number_input(
+                NumberFieldOptions {
+                    min: 0.,
+                    max: MAX_AUTO_FETCH_SECS as f64,
+                    ..Default::default()
+                },
+                |cx: &App| auto_fetch_interval(cx) as f64,
+                |val: f64, cx: &mut App| {
+                    GritSettings::global_mut(cx).auto_fetch_interval_secs =
+                        (val as u32).min(MAX_AUTO_FETCH_SECS);
+                    save(cx);
+                },
+            ),
+        )
+        .description("Seconds between automatic `git fetch`es (0 disables)."),
+    ])
 }
