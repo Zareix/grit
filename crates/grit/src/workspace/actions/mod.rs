@@ -209,23 +209,31 @@ impl Workspace {
     }
 
     /// Arm one watcher wait chain (a single one at a time): a background
-    /// task blocks until the next on-disk change batch, then the UI
-    /// refreshes and the next tick re-arms the chain. When the Workspace
-    /// closes, its watcher drops and the parked task reports disconnect.
+    /// task blocks until the next on-disk change batch that git considers
+    /// a status change, then the UI refreshes and the next tick re-arms the
+    /// chain. Gitignored files / build output are filtered inside
+    /// `wait_batch`. When the Workspace closes, its watcher drops and the
+    /// parked task reports `Closed` — the watcher is then released.
     fn service_watcher(&mut self, cx: &mut Context<Self>) {
         if self.watcher_armed {
             return;
         }
         let Some(events) = self.watcher.as_ref().map(|w| w.events.clone()) else { return };
+        let Some(repo) = self.repo.clone() else { return };
         self.watcher_armed = true;
-        let job = cx.background_spawn(async move { wait_batch(&events) });
+        let job = cx.background_spawn(async move { wait_batch(&events, &repo) });
         cx.spawn(async move |this, cx| {
-            let changed = job.await;
+            let batch = job.await;
             this.update(cx, |this, cx| {
+                if batch == grit_core::watcher::WatchBatch::Closed {
+                    // Channel disconnected (watcher dropped): stop re-arming.
+                    this.watcher = None;
+                }
                 this.watcher_armed = false;
-                if changed {
-                    // The fs watcher effectively IS a refresh trigger; count it
-                    // against the periodic interval to avoid a double reload.
+                if batch == grit_core::watcher::WatchBatch::Changed {
+                    // The fs watcher effectively IS a refresh trigger; count
+                    // it against the periodic interval to avoid a double
+                    // reload.
                     this.last_auto_refresh = Some(Instant::now());
                     this.refresh(cx);
                 }
@@ -533,13 +541,25 @@ impl Workspace {
         }
     }
 
-    /// Install a freshly produced patch in the diff viewer.
+    /// Install a freshly produced patch in the diff viewer. An identical
+    /// patch (the auto-refresh re-reads the selected file every interval)
+    /// is skipped: `DiffState::set_files` resets scroll, expansion and
+    /// selection, so re-pushing the same content would jump the view back
+    /// to the top on every refresh.
     pub(crate) fn set_diff(&mut self, result: grit_core::Result<String>, cx: &mut Context<Self>) {
         match result {
-            Ok(patch) => match DiffFile::parse(&patch) {
-                Ok(files) => self.diff.update(cx, |state, cx| state.set_files(files, cx)),
-                Err(e) => self.error = Some(e.to_string().into()),
-            },
+            Ok(patch) => {
+                if self.diff_patch.as_deref() == Some(patch.as_str()) {
+                    return;
+                }
+                match DiffFile::parse(&patch) {
+                    Ok(files) => {
+                        self.diff.update(cx, |state, cx| state.set_files(files, cx));
+                        self.diff_patch = Some(patch);
+                    }
+                    Err(e) => self.error = Some(e.to_string().into()),
+                }
+            }
             Err(e) => {
                 self.error = Some(e.to_string().into());
                 self.clear_diff(cx);
@@ -550,6 +570,7 @@ impl Workspace {
 
     /// Show the empty diff viewer (no file selected).
     pub(crate) fn clear_diff(&mut self, cx: &mut Context<Self>) {
+        self.diff_patch = None;
         self.diff.update(cx, |state, cx| state.set_files([], cx));
     }
 

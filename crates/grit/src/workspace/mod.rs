@@ -244,6 +244,10 @@ pub struct Workspace {
     /// Whether the diff panel is currently open; used to detect the
     /// open transition (frame-sized panel layout resets).
     diff_open: bool,
+    /// Raw patch text currently installed in the diff viewer; `set_diff`
+    /// skips re-installing an identical patch (a routine auto-refresh
+    /// re-reads the same file) so scroll, expansion and selection stay put.
+    diff_patch: Option<String>,
     error: Option<SharedString>,
     /// Auto-updater state, surfaced in the status bar (see `UpdateState`).
     update_state: UpdateState,
@@ -349,6 +353,7 @@ impl Workspace {
             commit_files: Vec::new(),
             diff_from_commit: false,
             diff_open: false,
+            diff_patch: None,
             error: None,
             update_state: UpdateState::Idle,
             auto_refresh_started: false,
