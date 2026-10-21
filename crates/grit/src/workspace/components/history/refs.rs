@@ -1,6 +1,10 @@
-//! The log's ref chips (branches / tags): one chip, then a muted "+N"
-//! whose HoverCard lists the remaining refs; chip right-clicks carry the
-//! sidebar's branch / remote menus.
+//! The log's ref chips (branches / tags): one chip per *logical branch*
+//! (`main` + `origin/main` at the same tip render as one "main" chip with a
+//! local and a remote icon side by side), then a muted "+N" whose HoverCard
+//! lists the remaining refs; chip right-clicks carry the sidebar's branch /
+//! remote menus — every action of both sides stays available (the remote
+//! part sits in a per-remote submenu whenever its actions would be
+//! ambiguous next to the local ones).
 
 use std::time::Duration;
 
@@ -16,6 +20,7 @@ use gpui_kit::*;
 
 use super::REFS_W;
 use crate::workspace::components::branches::{branch_menu, remote_branch_menu, tag_menu};
+use crate::workspace::components::primitives::{chip_remotes, remote_color};
 use crate::workspace::{CommitRef, CommitRefKind, Workspace};
 use grit_core::Oid;
 use grit_core::branch::BranchType;
@@ -85,7 +90,7 @@ pub(super) fn ref_chips(
 }
 
 /// The "+N" overflow menu: a labeled submenu per hidden ref, carrying the
-/// same actions as the sidebar menus on its rows.
+/// same actions as the chip menus on its rows.
 fn overflow_menu(
     mut menu: PopupMenu,
     refs: &[CommitRef],
@@ -96,31 +101,16 @@ fn overflow_menu(
     let Some(entity) = workspace.upgrade() else { return menu };
     for r in refs {
         // Build each submenu with a fresh menu, then attach it by label.
-        let icon = match r.kind {
-            CommitRefKind::Local => IconName::GitBranch,
-            CommitRefKind::Remote => IconName::GitBranch,
+        let icon = match &r.kind {
+            CommitRefKind::Branch { .. } => IconName::GitBranch,
             CommitRefKind::Tag => IconName::Tag,
         };
-        let entity = entity.clone();
         let sub = PopupMenu::build(window, cx, {
+            let entity = entity.clone();
             let workspace = workspace.clone();
             let r = r.clone();
-            move |menu, _window, cx| match r.kind {
-                CommitRefKind::Local => {
-                    let branch = entity
-                        .read(cx)
-                        .branches
-                        .iter()
-                        .find(|b| b.kind == BranchType::Local && b.name == r.name)
-                        .cloned();
-                    if let Some(branch) = branch {
-                        let is_current = branch.name == r.name;
-                        branch_menu(menu, &branch, is_current, &workspace, cx)
-                    } else {
-                        menu
-                    }
-                }
-                CommitRefKind::Remote => remote_branch_menu(menu, &r.name, &workspace, cx),
+            move |menu, window, cx| match &r.kind {
+                CommitRefKind::Branch { .. } => ref_menu(menu, &r, &workspace, window, cx),
                 CommitRefKind::Tag => {
                     let on_remote = entity
                         .read(cx)
@@ -138,7 +128,9 @@ fn overflow_menu(
 }
 
 /// One ref as a small colored chip (in the log row and in the "+N" hover
-/// card): local branch = primary, tag = success, remote = info. `max_w`
+/// card): branch text color = primary when local, else its first remote's
+/// color; icons: a branch glyph for the local part, one per remote colored
+/// by remote (see [`remote_color`]), tags keep the tag glyph. `max_w`
 /// bounds the name before an ellipsis kicks in. When `interactive`, the
 /// chip opens the ref's own menu on right-click (log rows only — the
 /// hover card's chips are display-only).
@@ -149,16 +141,25 @@ fn ref_chip(
     max_w: f32,
     cx: &App,
 ) -> gpui_kit::AnyElement {
-    let color = match r.kind {
-        CommitRefKind::Local => cx.theme().primary,
-        CommitRefKind::Remote => cx.theme().info,
-        CommitRefKind::Tag => cx.theme().success,
+    let theme = cx.theme();
+    let (color, icons): (gpui_kit::Hsla, Vec<(IconName, gpui_kit::Hsla)>) = match &r.kind {
+        CommitRefKind::Branch { local, remotes } => {
+            let globals = chip_remotes(workspace, cx);
+            let base_remote = remotes.first().map(|s| s.as_ref()).unwrap_or("");
+            let color =
+                if *local { theme.primary } else { remote_color(&globals, base_remote, cx) };
+            let mut icons = Vec::new();
+            if *local {
+                icons.push((IconName::Computer, theme.primary));
+            }
+            for remote in remotes {
+                icons.push((IconName::Cloud, remote_color(&globals, remote, cx)));
+            }
+            (color, icons)
+        }
+        CommitRefKind::Tag => (theme.success, vec![(IconName::Tag, theme.success)]),
     };
-    // Only tags carry their own icon; branch chips stay bare.
-    let icon = match r.kind {
-        CommitRefKind::Tag => Some(IconName::Tag),
-        _ => None,
-    };
+
     let base = div()
         .min_w_0()
         .px_1()
@@ -171,9 +172,11 @@ fn ref_chip(
             h_flex()
                 .min_w_0()
                 .gap_1()
-                .when_some(icon, |this, icon| {
-                    this.child(Icon::new(icon).size_3().text_color(color))
-                })
+                .children(
+                    icons
+                        .into_iter()
+                        .map(|(icon, color)| Icon::new(icon).size_3().text_color(color)),
+                )
                 .child(div().max_w(px(max_w)).truncate().child(r.name.clone())),
         );
     // Same menus as the sidebar, read live when the menu opens — chips
@@ -184,7 +187,7 @@ fn ref_chip(
         base.context_menu({
             let workspace = workspace.clone();
             let r = r.clone();
-            move |menu, _, cx| ref_menu(menu, &r, &workspace, cx)
+            move |menu, window, cx| ref_menu(menu, &r, &workspace, window, cx)
         })
         .into_any_element()
     } else {
@@ -192,31 +195,19 @@ fn ref_chip(
     }
 }
 
-/// The branches sidebar's menus on the log's ref chips. Tags act from
-/// here too (push / delete), branches delegate to the sidebar menus.
+/// The branches sidebar's menus on the log's ref chips — the merged chip
+/// carries every action: the local branch inline, one labeled submenu per
+/// remote (each reviving the remote-branch menu, GitHub entries included).
+/// Tags act from here too (push / delete).
 fn ref_menu(
     menu: PopupMenu,
     r: &CommitRef,
     workspace: &WeakEntity<Workspace>,
+    window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let Some(entity) = workspace.upgrade() else { return menu };
-    match r.kind {
-        CommitRefKind::Local => {
-            // Clone the branch up front: `branch_menu` mutably re-uses `cx`.
-            let branch = entity
-                .read(cx)
-                .branches
-                .iter()
-                .find(|b| b.kind == BranchType::Local && b.name == r.name)
-                .cloned();
-            if let Some(branch) = branch {
-                branch_menu(menu, &branch, r.is_current, workspace, cx)
-            } else {
-                menu
-            }
-        }
-        CommitRefKind::Remote => remote_branch_menu(menu, &r.name, workspace, cx),
+    match &r.kind {
         CommitRefKind::Tag => {
             let on_remote = entity
                 .read(cx)
@@ -225,5 +216,57 @@ fn ref_menu(
                 .is_some_and(|known| known.contains(r.name.as_str()));
             tag_menu(menu, &r.name, on_remote, workspace, cx)
         }
+        CommitRefKind::Branch { local, remotes } => {
+            let mut menu = menu;
+            if *local
+                && let Some(branch) = entity
+                    .read(cx)
+                    .branches
+                    .iter()
+                    .find(|b| b.kind == BranchType::Local && b.name == r.name)
+                    .cloned()
+            {
+                menu = branch_menu(menu, &branch, r.is_current, workspace, cx);
+            }
+
+            match remote_menu_style(remotes, local) {
+                RemoteMenuStyle::Inline => {
+                    let full = format!("{}/{name}", remotes[0], name = r.name);
+                    remote_branch_menu(menu, &full, workspace, cx)
+                }
+                RemoteMenuStyle::Submenus => {
+                    if *local {
+                        menu = menu.separator();
+                    }
+                    for remote in remotes {
+                        let full: String = format!("{remote}/{}", r.name);
+                        let sub = PopupMenu::build(window, cx, {
+                            let workspace = workspace.clone();
+                            let full = full.clone();
+                            move |menu, _, cx| remote_branch_menu(menu, &full, &workspace, cx)
+                        });
+                        menu = menu.item(PopupMenuItem::submenu(full, sub).icon(IconName::Cloud));
+                    }
+                    menu
+                }
+            }
+        }
+    }
+}
+
+/// Menu shape for a chip's remote side: direct items are fine when the
+/// remote part is the chip's only actor (no ambiguity with local items);
+/// with local actions already present (or several remotes), each remote
+/// gets its own submenu so every action stays reachable and labeled.
+enum RemoteMenuStyle {
+    Inline,
+    Submenus,
+}
+
+fn remote_menu_style(remotes: &[SharedString], has_local: &bool) -> RemoteMenuStyle {
+    if remotes.len() == 1 && !*has_local {
+        RemoteMenuStyle::Inline
+    } else {
+        RemoteMenuStyle::Submenus
     }
 }

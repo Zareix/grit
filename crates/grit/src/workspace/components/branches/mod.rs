@@ -26,9 +26,10 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use grit_core::branch::{Branch, BranchType, full_ref};
+use grit_core::github::PrInfo;
 use grit_core::{Oid, remote::RemoteOp};
 
-use super::primitives::SectionLabel;
+use super::primitives::{PrBadge, SectionLabel};
 use crate::workspace::{BranchOp, Workspace};
 
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
@@ -139,8 +140,10 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
 
 /// Row click = scroll the log to this branch's tip. Menu button (hover) =
 /// actions; the same menu is available on right-click (context menu).
+/// `pr` renders the open-PR chip beside the name when the branch has one.
 fn branch_row_shell(
     branch: &Branch,
+    pr: Option<&PrInfo>,
     cx: &mut Context<Workspace>,
     foreground: gpui_kit::Hsla,
     is_current: bool,
@@ -175,7 +178,9 @@ fn branch_row_shell(
                 // Current branch stands out by weight alone (no badge).
                 .when(is_current, |this| this.font_weight(FontWeight::SEMIBOLD))
                 .child(name.clone()),
-        );
+        )
+        // Open-PR chip beside the name (clicking still reveals the branch).
+        .when_some(pr, |this, pr| this.child(PrBadge::new(pr, cx)));
 
     let mut row = h_flex()
         .w_full()
@@ -267,6 +272,11 @@ pub(crate) fn branch_menu(
             },
         ),
     );
+
+    menu = menu.separator();
+
+    // GitHub web entries (PR page / branch commits view).
+    menu = github_menu_items(menu, &name, None, workspace, cx);
 
     menu = menu.separator();
 
@@ -515,11 +525,70 @@ fn integration_items(
     menu
 }
 
+/// GitHub web entries shared by the branch menus: the branch's PR page
+/// (when one is open) and the branch's commits view. Rendered only when
+/// the addressed repo resolves to GitHub coordinates (the web pages need
+/// no token, but the PR data is discovered only while signed in).
+///
+/// `remote` names the repo the branch-view URL points at — a remote
+/// leaf's own remote; `None` (local branches) resolves to the PR-cache
+/// remote (`origin` preferred). The PR entry is repo-wide: the cached
+/// list knows PRs from every head (forks included), so a fork leaf with
+/// an open PR opens it.
+pub(crate) fn github_menu_items(
+    mut menu: PopupMenu,
+    short_branch: &str,
+    remote: Option<&str>,
+    workspace: &WeakEntity<Workspace>,
+    cx: &mut App,
+) -> PopupMenu {
+    let Some(entity) = workspace.upgrade() else { return menu };
+    let context = {
+        let ws = entity.read(cx);
+        let coords = match remote {
+            Some(remote) => ws.github.coords.get(remote).cloned(),
+            None => ws.github.pr_remote.as_deref().and_then(|r| ws.github.coords.get(r).cloned()),
+        };
+        coords.map(|coords| (coords, ws.github.prs.get(short_branch).cloned()))
+    };
+    let Some((coords, pr)) = context else { return menu };
+
+    menu = menu.separator();
+    menu = match pr {
+        Some(pr) => {
+            let url = pr.url;
+            menu.item(
+                PopupMenuItem::new(format!("Open pull request on GitHub (#{})", pr.number))
+                    .icon(IconName::GitPullRequest)
+                    .on_click({
+                        let workspace = workspace.clone();
+                        move |_, _, cx| {
+                            workspace.update(cx, |ws, cx| ws.open_github_url(url.clone(), cx)).ok();
+                        }
+                    }),
+            )
+        }
+        None => menu.item(
+            PopupMenuItem::new("Open pull request on GitHub")
+                .icon(IconName::GitPullRequest)
+                .disabled(true),
+        ),
+    };
+    let url = coords.branch_url(short_branch);
+    menu.item(PopupMenuItem::new("Open branch on GitHub").icon(IconName::ExternalLink).on_click({
+        let workspace = workspace.clone();
+        move |_, _, cx| {
+            workspace.update(cx, |ws, cx| ws.open_github_url(url.clone(), cx)).ok();
+        }
+    }))
+}
+
 fn local_branch_row(
     ws: &Workspace,
     branch: &Branch,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     let is_current = ws.current_branch.as_ref().is_some_and(|c| c.name == branch.name);
-    branch_row_shell(branch, cx, cx.theme().foreground, is_current)
+    let pr = ws.github.prs.get(branch.name.as_str());
+    branch_row_shell(branch, pr, cx, cx.theme().foreground, is_current)
 }

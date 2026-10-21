@@ -2738,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "grit"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "dirs 7.0.0",
@@ -2752,10 +2752,11 @@ dependencies = [
 
 [[package]]
 name = "grit-core"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "git2",
  "notify",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
 ]

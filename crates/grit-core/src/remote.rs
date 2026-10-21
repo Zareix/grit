@@ -34,7 +34,9 @@ impl Repo {
     /// branches) stay forever and clutter the remotes tree.
     pub fn run_remote_op(&self, op: RemoteOp) -> Result<String> {
         match op {
-            RemoteOp::Fetch => self.run_git(&["fetch".to_string(), "--prune".to_string()]),
+            RemoteOp::Fetch => {
+                self.run_git(&["fetch".to_string(), "--all".to_string(), "--prune".to_string()])
+            }
             _ => self.run_git(&[op.name().to_string()]),
         }
     }
@@ -92,5 +94,12 @@ impl Repo {
             .collect();
         names.sort_by_key(|name| name != "origin");
         Ok(names)
+    }
+
+    /// Fetch/push URL of a configured remote (None when unresolvable).
+    pub fn remote_url(&self, name: &str) -> Option<String> {
+        let repo = self.git2().ok()?;
+        let remote = repo.find_remote(name).ok()?;
+        remote.url().ok().map(str::to_owned)
     }
 }

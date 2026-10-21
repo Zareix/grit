@@ -5,7 +5,31 @@
 
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::*;
+use grit_core::github::PrInfo;
 use grit_core::status::ChangeKind;
+
+use crate::workspace::{WeakEntity, Workspace};
+
+/// Distinct remotes owning at least one branch (`origin` first) — the
+/// stable order behind the per-remote chip colors (log chips and the
+/// remotes-tree roots read from the same mapping).
+pub fn chip_remotes(workspace: &WeakEntity<Workspace>, cx: &App) -> Vec<SharedString> {
+    workspace.upgrade().map(|entity| entity.read(cx).remote_names()).unwrap_or_default()
+}
+
+/// The per-remote color from a semantic palette cycling `info → success
+/// → warning → danger` (first remote = origin sits on `info`); unknown
+/// remotes fall back to `info`. Indexing comes from [`chip_remotes`].
+pub fn remote_color(globals: &[SharedString], remote: &str, cx: &App) -> gpui_kit::Hsla {
+    let theme = cx.theme();
+    match globals.iter().position(|g| g.as_ref() == remote) {
+        Some(0) | None => theme.info,
+        Some(1) => theme.success,
+        Some(2) => theme.warning,
+        Some(3) => theme.danger,
+        Some(ix) => [theme.info, theme.success, theme.warning, theme.danger][ix % 4],
+    }
+}
 
 /// Change-kind label + semantic color, shared by badge + text usages.
 pub fn kind_colors(
@@ -80,6 +104,33 @@ impl RenderOnce for SectionLabel {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.color)
             .child(self.title)
+    }
+}
+
+/// The `#42` open-PR chip beside a branch row; draft PRs render muted.
+#[derive(IntoElement)]
+pub struct PrBadge {
+    label: String,
+    color: gpui_kit::Hsla,
+}
+
+impl PrBadge {
+    pub fn new(pr: &PrInfo, cx: &App) -> Self {
+        let color = if pr.draft { cx.theme().muted_foreground } else { cx.theme().info };
+        Self { label: format!("#{}", pr.number), color }
+    }
+}
+
+impl RenderOnce for PrBadge {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        h_flex()
+            .px_1()
+            .rounded_sm()
+            .text_size(px(10.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(self.color)
+            .bg(self.color.opacity(0.15))
+            .child(self.label)
     }
 }
 

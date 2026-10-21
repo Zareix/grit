@@ -15,6 +15,8 @@ use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::github;
+
 /// Command run in the launched Agent terminal tab.
 const DEFAULT_AGENT_COMMAND: &str = "opencode -c";
 
@@ -138,20 +140,27 @@ pub(crate) fn open_settings_window(cx: &mut App) {
                 Theme::sync_system_appearance(Some(window), cx);
             })
             .detach();
-        cx.new(|_| SettingsWindow)
+        cx.new(|cx| {
+            let github_panel = cx.new(|cx| github::SignInPanel::new(&github::session(cx), cx));
+            SettingsWindow { github_panel }
+        })
     })
     .expect("failed to open Settings window");
 }
 
 /// Retained view hosting the GPUI Kit `Settings` component.
-struct SettingsWindow;
+struct SettingsWindow {
+    /// The GitHub sign-in panel; the page field re-renders the same view
+    /// entity, whose own observation keeps it current with the session.
+    github_panel: Entity<github::SignInPanel>,
+}
 
 impl Render for SettingsWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div().size_full().bg(cx.theme().background).text_color(cx.theme().foreground).child(
             Settings::new("grit-settings")
                 .with_group_variant(GroupBoxVariant::Outline)
-                .pages(vec![general_page()]),
+                .pages(vec![general_page(), github_page(self.github_panel.clone())]),
         )
     }
 }
@@ -163,6 +172,17 @@ fn general_page() -> SettingPage {
         .icon(IconName::Settings)
         .resettable(true)
         .groups(vec![agent_group(), auto_refresh_group()])
+}
+
+/// The "GitHub" page: the OAuth Device Flow sign-in panel (status, the
+/// one-time code or the failure, sign-out).
+fn github_page(panel: Entity<github::SignInPanel>) -> SettingPage {
+    SettingPage::new("GitHub").icon(IconName::Github).groups(vec![
+        SettingGroup::new()
+            .title("Account")
+            .item(SettingItem::render(move |_, _, _| panel.clone().into_any_element()))
+            .footer(|_, _| "Sign-in uses GitHub's Device Flow; no password ever touches Grit."),
+    ])
 }
 
 /// The Agent launcher command.

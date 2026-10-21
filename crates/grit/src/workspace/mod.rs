@@ -20,8 +20,9 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use grit_core::{
     Oid, Repo,
-    branch::Branch,
+    branch::{Branch, BranchType},
     commit::Commit,
+    github::{GitHubCoords, PrInfo},
     graph::GraphData,
     status::{FileEntry, Status},
     tags::Tag,
@@ -31,20 +32,70 @@ use self::components::{
     branches, commit_details, diff_view, history, staging, status_bar, toolbar,
 };
 
-/// A ref (branch or tag) pointing at a commit, shown as a chip in the log.
+/// A ref (branch or tag) pointing at a commit, shown as one chip in the
+/// log. Branch chips are *logical*: `main` and `origin/main` at the same
+/// commit render as a single "main" chip carrying a local and a remote
+/// icon side by side (each remote's icon colored distinctly); whether
+/// they sit on different commits still yields separate chips.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitRef {
+    /// Short display name (`main` — remote prefixes are stripped; tags
+    /// keep theirs).
     pub name: SharedString,
     pub kind: CommitRefKind,
     /// The checked-out branch (rendered with extra emphasis).
     pub is_current: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitRefKind {
-    Local,
-    Remote,
+    /// One branch name hosted by a local branch and/or N remotes, all
+    /// pointing at this commit. Remotes render with per-remote chip
+    /// colors (see `refs.rs`).
+    Branch {
+        /// A local branch with this name points at the commit.
+        local: bool,
+        /// Remote names hosting it here, `origin`-first (branches iter.
+        /// order already puts remotes sorted by the `remotes()` layout).
+        remotes: Vec<SharedString>,
+    },
     Tag,
+}
+
+/// Full git ref of the chip's local branch (`main` → `main`).
+impl CommitRef {
+    /// Accumulate `branch` into this logical chip (see `rebuild_refs`).
+    pub(crate) fn add_branch(&mut self, branch: &Branch) {
+        match branch.kind {
+            BranchType::Local => {
+                if let CommitRefKind::Branch { local, .. } = &mut self.kind {
+                    *local = true;
+                }
+            }
+            BranchType::Remote => {
+                if let (Some((remote, _)), CommitRefKind::Branch { remotes, .. }) =
+                    (branch.name.split_once('/'), &mut self.kind)
+                    && !remotes.iter().any(|r| r == remote)
+                {
+                    remotes.push(remote.into());
+                }
+            }
+        }
+    }
+
+    /// Chip sort order: local branches first, tags, remote-only branches.
+    pub(crate) fn order(&self) -> u8 {
+        match &self.kind {
+            CommitRefKind::Branch { local, .. } => {
+                if *local {
+                    0
+                } else {
+                    2
+                }
+            }
+            CommitRefKind::Tag => 1,
+        }
+    }
 }
 
 /// Which part of a file path the "Copy file path" submenu puts on the
@@ -71,6 +122,26 @@ pub enum CreateTarget {
 
 /// A stash in the branches column's stash panel.
 pub type Stash = grit_core::stash::Stash;
+
+/// GitHub repo-scope state: the coordinates of **every** remote pointing
+/// at GitHub plus the cached open-PR list (both read in background jobs
+/// from [`grit_core::github`]); the sign-in session is the app-level global.
+#[derive(Debug, Default)]
+pub(crate) struct GitHubState {
+    /// GitHub repo per remote name (`origin`, a fork remote, …).
+    pub(crate) coords: HashMap<String, GitHubCoords>,
+    /// The remote whose API feeds the PR cache (the first GitHub remote,
+    /// `origin` preferred).
+    pub(crate) pr_remote: Option<String>,
+    /// Open PRs keyed by head branch name (short: `feat/x`, not `origin/feat/x`).
+    pub(crate) prs: HashMap<String, PrInfo>,
+    /// Monotonic generation counter (never reset with the struct: preserves
+    /// invalidation across repo switches); every new job takes its own.
+    pub(crate) seq: u64,
+    /// Last lookup attempt (throttle base; failures retry sooner).
+    pub(crate) last_pr_attempt: Option<std::time::Instant>,
+    pub(crate) last_pr_success: Option<std::time::Instant>,
+}
 
 /// What the auto-updater has last learned; rendered by the status bar and
 /// driven by the menu / button / dialogs.
@@ -255,6 +326,8 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Auto-updater state, surfaced in the status bar (see `UpdateState`).
     update_state: UpdateState,
+    /// GitHub repo coordinates + cached open PRs (see `GitHubState`).
+    github: GitHubState,
     /// Whether the auto-refresh timer loop is running (one per Workspace).
     auto_refresh_started: bool,
     /// When the last automatic refresh was triggered; compared against the
@@ -361,6 +434,7 @@ impl Workspace {
             diff_patch: None,
             error: None,
             update_state: UpdateState::Idle,
+            github: GitHubState::default(),
             auto_refresh_started: false,
             last_auto_refresh: None,
             last_fetch: None,
@@ -377,6 +451,25 @@ impl Workspace {
         // Launch auto-check (throttled to once >> 24h; silent failures).
         this.maybe_check_for_updates(cx);
         this
+    }
+}
+
+impl Workspace {
+    /// Distinct remotes owning at least one branch (`origin` first),
+    /// the stable order behind the log's per-remote chip colors.
+    pub(crate) fn remote_names(&self) -> Vec<SharedString> {
+        let mut out: Vec<SharedString> = Vec::new();
+        for branch in &self.branches {
+            if let BranchType::Remote = branch.kind
+                && let Some((remote, _)) = branch.name.split_once('/')
+                && !out.iter().any(|r| r == remote)
+            {
+                out.push(remote.into());
+            }
+        }
+        // `origin` first (by configured-remote convention), then stable.
+        out.sort_by_key(|r| (r.as_ref() != "origin", r.clone()));
+        out
     }
 }
 
