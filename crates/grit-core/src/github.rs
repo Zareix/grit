@@ -144,14 +144,23 @@ pub struct PrInfo {
     pub fork: bool,
 }
 
-/// GitHub coordinates of a repo's remotes, `origin` checked first.
-/// Blocking local reads; background threads only.
-pub fn resolve_github_coords(repo: &Repo) -> Option<(String, GitHubCoords)> {
-    let remotes = repo.remotes().ok()?;
-    remotes.iter().find_map(|remote| {
-        let url = repo.remote_url(remote)?;
-        parse_github_remote(&url).map(|coords| (remote.clone(), coords))
-    })
+/// GitHub coordinates of **every** remote pointing at GitHub, plus which
+/// remote feeds the PR cache (the first, `origin` being listed first by
+/// `Repo::remotes()`). Blocking local reads; background threads only.
+pub fn resolve_github_remotes(repo: &Repo) -> (HashMap<String, GitHubCoords>, Option<String>) {
+    let mut coords = HashMap::new();
+    let mut first: Option<String> = None;
+    if let Ok(remotes) = repo.remotes() {
+        for remote in remotes {
+            if let Some(url) = repo.remote_url(&remote)
+                && let Some(parsed) = parse_github_remote(&url)
+            {
+                first.get_or_insert_with(|| remote.clone());
+                coords.insert(remote, parsed);
+            }
+        }
+    }
+    (coords, first)
 }
 
 /// Open PRs of a repository keyed by head branch name. One API call

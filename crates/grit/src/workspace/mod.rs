@@ -123,15 +123,16 @@ pub enum CreateTarget {
 /// A stash in the branches column's stash panel.
 pub type Stash = grit_core::stash::Stash;
 
-/// GitHub repo-scope state: the coordinates of the repo's GitHub remote
-/// plus the cached open-PR list (both read in background jobs from
-/// [`grit_core::github`]); the sign-in session is the app-level global.
+/// GitHub repo-scope state: the coordinates of **every** remote pointing
+/// at GitHub plus the cached open-PR list (both read in background jobs
+/// from [`grit_core::github`]); the sign-in session is the app-level global.
 #[derive(Debug, Default)]
 pub(crate) struct GitHubState {
-    /// GitHub repo the remotes point at (`None` when found nowhere).
-    pub(crate) coords: Option<GitHubCoords>,
-    /// Remote name the `coords` came from (drives the remotes-tree menu).
-    pub(crate) remote: Option<String>,
+    /// GitHub repo per remote name (`origin`, a fork remote, …).
+    pub(crate) coords: HashMap<String, GitHubCoords>,
+    /// The remote whose API feeds the PR cache (the first GitHub remote,
+    /// `origin` preferred).
+    pub(crate) pr_remote: Option<String>,
     /// Open PRs keyed by head branch name (short: `feat/x`, not `origin/feat/x`).
     pub(crate) prs: HashMap<String, PrInfo>,
     /// Monotonic generation counter (never reset with the struct: preserves

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::*;
 
 use crate::workspace::GitHubState;
+use grit_core::github::GitHubCoords;
 
 use super::Workspace;
 
@@ -20,6 +21,12 @@ const PR_INTERVAL: Duration = Duration::from_secs(120);
 const PR_RETRY: Duration = Duration::from_secs(60);
 
 impl Workspace {
+    /// The coordinates of the remote feeding the PR cache (`pr_remote`).
+    fn pr_coords(&self) -> Option<GitHubCoords> {
+        let remote = self.github.pr_remote.as_deref()?;
+        self.github.coords.get(remote).cloned()
+    }
+
     /// Discover the GitHub coordinates of the remotes on repo open
     /// (origin first) and clear the previous repo's PR cache. The
     /// generation counter advances before the reset: lookups or resolution
@@ -33,15 +40,13 @@ impl Workspace {
 
         let Some(repo) = self.repo.clone() else { return };
         let job =
-            cx.background_spawn(async move { grit_core::github::resolve_github_coords(&repo) });
+            cx.background_spawn(async move { grit_core::github::resolve_github_remotes(&repo) });
         cx.spawn(async move |this, cx| {
             let found = job.await;
             this.update(cx, |this, cx| {
-                if seq == this.github.seq
-                    && let Some((remote, coords)) = found
-                {
-                    this.github.remote = Some(remote);
-                    this.github.coords = Some(coords);
+                if seq == this.github.seq {
+                    this.github.coords = found.0;
+                    this.github.pr_remote = found.1;
                     cx.notify();
                 }
             })
@@ -57,7 +62,9 @@ impl Workspace {
         if !crate::github::signed_in(cx) {
             return;
         }
-        let Some(_) = self.github.coords else { return };
+        if self.pr_coords().is_none() {
+            return;
+        }
         let delay = match (self.github.last_pr_success, self.github.last_pr_attempt) {
             (Some(s), Some(a)) if s >= a => PR_INTERVAL,
             (_, Some(_)) => PR_RETRY, // failures (and never-attempted) go now
@@ -73,7 +80,7 @@ impl Workspace {
     /// stay silent: the throttle makes the next tick retry, and the PR
     /// data is decorative.
     pub(crate) fn refresh_github_prs(&mut self, cx: &mut Context<Self>) {
-        let Some(coords) = self.github.coords.clone() else { return };
+        let Some(coords) = self.pr_coords() else { return };
         let Some(token) = crate::github::token(cx) else { return };
         self.github.seq += 1;
         let seq = self.github.seq;

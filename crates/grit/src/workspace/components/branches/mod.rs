@@ -276,7 +276,7 @@ pub(crate) fn branch_menu(
     menu = menu.separator();
 
     // GitHub web entries (PR page / branch commits view).
-    menu = github_menu_items(menu, &name, workspace, cx);
+    menu = github_menu_items(menu, &name, None, workspace, cx);
 
     menu = menu.separator();
 
@@ -527,26 +527,31 @@ fn integration_items(
 
 /// GitHub web entries shared by the branch menus: the branch's PR page
 /// (when one is open) and the branch's commits view. Rendered only when
-/// the repo resolves to GitHub coordinates (the web pages need no token,
-/// but the PR data is discovered only while signed in).
+/// the addressed repo resolves to GitHub coordinates (the web pages need
+/// no token, but the PR data is discovered only while signed in).
+///
+/// `remote` names the repo the branch-view URL points at — a remote
+/// leaf's own remote; `None` (local branches) resolves to the PR-cache
+/// remote (`origin` preferred). The PR entry is repo-wide: the cached
+/// list knows PRs from every head (forks included), so a fork leaf with
+/// an open PR opens it.
 pub(crate) fn github_menu_items(
     mut menu: PopupMenu,
     short_branch: &str,
+    remote: Option<&str>,
     workspace: &WeakEntity<Workspace>,
     cx: &mut App,
 ) -> PopupMenu {
     let Some(entity) = workspace.upgrade() else { return menu };
-    let pr = {
+    let context = {
         let ws = entity.read(cx);
-        match ws.github.coords.as_ref() {
-            Some(coords) => {
-                let pr = ws.github.prs.get(short_branch).cloned();
-                Some((coords.clone(), pr))
-            }
-            None => None,
-        }
+        let coords = match remote {
+            Some(remote) => ws.github.coords.get(remote).cloned(),
+            None => ws.github.pr_remote.as_deref().and_then(|r| ws.github.coords.get(r).cloned()),
+        };
+        coords.map(|coords| (coords, ws.github.prs.get(short_branch).cloned()))
     };
-    let Some((coords, pr)) = pr else { return menu };
+    let Some((coords, pr)) = context else { return menu };
 
     menu = menu.separator();
     menu = match pr {

@@ -138,10 +138,10 @@ pub(super) fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) ->
 
         // Leaves with an open PR show its `#n` chip beside the label — inside
         // the icon/label flex row: ListItem stacks its children as blocks.
+        // The cache is keyed by short head-ref name (fork PRs included).
         let pr = (!is_folder).then(|| workspace.upgrade()).flatten().and_then(|entity| {
             let ws = entity.read(cx);
-            let remote = ws.github.remote.as_deref()?;
-            let short = id.strip_prefix(&format!("{remote}/"))?;
+            let (_, short) = id.split_once('/')?;
             ws.github.prs.get(short).cloned()
         });
 
@@ -229,14 +229,16 @@ pub(crate) fn remote_branch_menu(
         }
     }));
 
-    // GitHub web entries (PR page / commits view), keyed by short name.
+    // GitHub web entries (PR page / commits view), keyed by short name;
+    // the branch URL points at this leaf's own remote's repo.
     let short = name.split_once('/').map(|(_, s)| s).unwrap_or(name).to_owned();
-    github_menu_items(menu, &short, workspace, cx)
+    let leaf_remote = name.split_once('/').map(|(r, _)| r);
+    github_menu_items(menu, &short, leaf_remote, workspace, cx)
 }
 
-/// The remote root's (depth-0) menu: open the repository on GitHub — only
-/// when this remote's URL resolved to GitHub coordinates (otherwise the
-/// empty menu never opens, like before).
+/// The remote root's (depth-0) menu: open the repository on GitHub — for
+/// any remote whose URL resolved to GitHub coordinates (origin and forks
+/// alike; an empty menu never opens, like before).
 pub(crate) fn github_repo_menu(
     mut menu: PopupMenu,
     remote: &str,
@@ -246,11 +248,7 @@ pub(crate) fn github_repo_menu(
     let Some(entity) = workspace.upgrade() else { return menu };
     let url = {
         let ws = entity.read(cx);
-        ws.github
-            .remote
-            .as_deref()
-            .filter(|r| *r == remote)
-            .and_then(|_| ws.github.coords.as_ref().map(|c| c.web_url()))
+        ws.github.coords.get(remote).map(|c| c.web_url())
     };
     if let Some(url) = url {
         menu = menu.item(
