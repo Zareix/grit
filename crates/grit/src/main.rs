@@ -1,6 +1,7 @@
 //! Grit — a native Git client built in Rust with GPUI Kit.
 
 mod about;
+mod github;
 mod session;
 mod settings;
 mod workspace;
@@ -105,6 +106,9 @@ fn main() {
         // Loading persisted settings into the app Global (kept in sync by
         // the Settings window, read on demand by launchers).
         settings::init(cx);
+        // GitHub account session (OAuth Device Flow), restored from the
+        // Keychain in the background.
+        github::init(cx);
 
         // Follow the system appearance from startup (sync_system_appearance
         // with no window reads `cx.window_appearance()`); each window then

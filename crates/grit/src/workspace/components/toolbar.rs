@@ -56,7 +56,7 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                         .icon(IconName::Github)
                         .label("GitHub")
                         .on_click(
-                            cx.listener(|this, _, window, cx| this.open_sign_in_dialog(window, cx)),
+                            cx.listener(|_, _, _, cx| crate::settings::open_settings_window(cx)),
                         ),
                 )
                 .child(

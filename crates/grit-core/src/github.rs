@@ -23,7 +23,7 @@ use crate::error::{Error, Result};
 /// OAuth Device Flow: ask for a device + user code pair.
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 /// OAuth Device Flow: exchange a granted user code for an access token.
-const ACCESS_TOKEN_URL: &str = "https://login/oauth/access_token";
+const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 /// Where the user enters the one-time `user_code`.
 pub const DEVICE_VERIFICATION_URL: &str = "https://github.com/login/device";
 

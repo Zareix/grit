@@ -7,8 +7,6 @@ mod components;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use gpui_kit::component::{
     ActiveTheme as _, ResizableState,
@@ -106,55 +104,6 @@ pub struct AvailableUpdate {
     pub checksum_url: String,
     /// DMG size in bytes (asset metadata), for the dialog.
     pub size: u64,
-}
-
-/// GitHub connection phase; rendered by the sign-in dialog's body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GitHubPhase {
-    /// No token (idle; also the state right after a canceled sign-in).
-    SignedOut,
-    /// The device-code request is in flight.
-    Connecting,
-    /// The code is live: enter it at the verification URI before the expiry;
-    /// the token poll runs in the background.
-    AwaitingDevice {
-        /// One-time code shown to the user.
-        user_code: SharedString,
-        /// Where to enter it (`github.com/login/device`).
-        verification_uri: SharedString,
-    },
-    /// The last attempt failed; the dialog offers a retry.
-    Failed(SharedString),
-    /// Connected; the login name is filled after sign-in (not resolved for
-    /// restored Keychain sessions).
-    SignedIn { login: Option<SharedString> },
-}
-
-/// GitHub session state: Device Flow auth plus the cached token.
-#[derive(Debug)]
-pub struct GitHubState {
-    /// Sign-in phase surfaced in the dialog.
-    pub phase: GitHubPhase,
-    /// Cached OAuth token (loaded from the Keychain at startup, refreshed
-    /// after a completed sign-in). Private: only actions use it, features
-    /// to come read what the phase exposes.
-    pub(crate) token: Option<String>,
-    /// Generation counter invalidating superseded background jobs (a token
-    /// poll landing after a cancel must not flip the phase back).
-    pub(crate) seq: u64,
-    /// Cancellation flag for the active token-poll loop.
-    pub(crate) sign_in_cancel: Arc<AtomicBool>,
-}
-
-impl GitHubState {
-    fn new() -> Self {
-        Self {
-            phase: GitHubPhase::SignedOut,
-            token: None,
-            seq: 0,
-            sign_in_cancel: Arc::new(AtomicBool::new(false)),
-        }
-    }
 }
 
 /// Branch-to-branch operations. Targets are full git refs (`refs/heads/x`,
@@ -306,8 +255,6 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Auto-updater state, surfaced in the status bar (see `UpdateState`).
     update_state: UpdateState,
-    /// GitHub session (Device Flow auth; see `GitHubState`).
-    github: GitHubState,
     /// Whether the auto-refresh timer loop is running (one per Workspace).
     auto_refresh_started: bool,
     /// When the last automatic refresh was triggered; compared against the
@@ -414,7 +361,6 @@ impl Workspace {
             diff_patch: None,
             error: None,
             update_state: UpdateState::Idle,
-            github: GitHubState::new(),
             auto_refresh_started: false,
             last_auto_refresh: None,
             last_fetch: None,
