@@ -360,21 +360,45 @@ impl Workspace {
     }
 
     /// Regroup branches + tags by the commit they point at, for the log's
-    /// ref chips. Per commit: local branches first, then tags, then remotes.
+    /// chips. Branches of one *short name* sharing a tip merge into a
+    /// single logical chip (`main` + `origin/main` → "main" with both a
+    /// local and a remote icon; see [`CommitRef`]).
     pub(crate) fn rebuild_refs(&mut self) {
         self.refs_by_commit.clear();
         let current = self.current_branch.as_ref().map(|b| b.name.clone());
 
         for branch in &self.branches {
-            let kind = match branch.kind {
-                BranchType::Local => CommitRefKind::Local,
-                BranchType::Remote => CommitRefKind::Remote,
+            let display = match branch.kind {
+                // Local branch name is already the display name; remotes
+                // contribute their short name (`origin/main` → `main`).
+                BranchType::Local => Some(branch.name.clone()),
+                BranchType::Remote => branch.name.split_once('/').map(|(_, s)| s.to_owned()),
             };
-            self.refs_by_commit.entry(branch.head).or_default().push(CommitRef {
-                name: branch.name.clone().into(),
-                kind,
-                is_current: current.as_deref() == Some(branch.name.as_str()),
-            });
+            let Some(display) = display else { continue };
+            let is_current = matches!(branch.kind, BranchType::Local)
+                && current.as_deref() == Some(branch.name.as_str());
+
+            let chips = self.refs_by_commit.entry(branch.head).or_default();
+            let chip = if let Some(chip) = chips
+                .iter_mut()
+                .find(|r| matches!(r.kind, CommitRefKind::Branch { .. }) && r.name == display)
+            {
+                chip
+            } else {
+                let kind = match branch.kind {
+                    BranchType::Local => CommitRefKind::Branch { local: true, remotes: Vec::new() },
+                    BranchType::Remote => CommitRefKind::Branch {
+                        local: false,
+                        remotes: vec![
+                            branch.name.split_once('/').map(|(r, _)| r).unwrap_or("").into(),
+                        ],
+                    },
+                };
+                chips.push(CommitRef { name: display.into(), kind, is_current });
+                chips.last_mut().expect("just pushed")
+            };
+            chip.add_branch(branch);
+            chip.is_current = chip.is_current || is_current;
         }
         for tag in &self.tags {
             self.refs_by_commit.entry(tag.target).or_default().push(CommitRef {
@@ -384,11 +408,7 @@ impl Workspace {
             });
         }
         for refs in self.refs_by_commit.values_mut() {
-            refs.sort_by_key(|r| match r.kind {
-                CommitRefKind::Local => 0,
-                CommitRefKind::Tag => 1,
-                CommitRefKind::Remote => 2,
-            });
+            refs.sort_by_key(|r| r.order());
         }
     }
 

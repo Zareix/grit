@@ -20,7 +20,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use grit_core::{
     Oid, Repo,
-    branch::Branch,
+    branch::{Branch, BranchType},
     commit::Commit,
     github::{GitHubCoords, PrInfo},
     graph::GraphData,
@@ -32,20 +32,70 @@ use self::components::{
     branches, commit_details, diff_view, history, staging, status_bar, toolbar,
 };
 
-/// A ref (branch or tag) pointing at a commit, shown as a chip in the log.
+/// A ref (branch or tag) pointing at a commit, shown as one chip in the
+/// log. Branch chips are *logical*: `main` and `origin/main` at the same
+/// commit render as a single "main" chip carrying a local and a remote
+/// icon side by side (each remote's icon colored distinctly); whether
+/// they sit on different commits still yields separate chips.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitRef {
+    /// Short display name (`main` — remote prefixes are stripped; tags
+    /// keep theirs).
     pub name: SharedString,
     pub kind: CommitRefKind,
     /// The checked-out branch (rendered with extra emphasis).
     pub is_current: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitRefKind {
-    Local,
-    Remote,
+    /// One branch name hosted by a local branch and/or N remotes, all
+    /// pointing at this commit. Remotes render with per-remote chip
+    /// colors (see `refs.rs`).
+    Branch {
+        /// A local branch with this name points at the commit.
+        local: bool,
+        /// Remote names hosting it here, `origin`-first (branches iter.
+        /// order already puts remotes sorted by the `remotes()` layout).
+        remotes: Vec<SharedString>,
+    },
     Tag,
+}
+
+/// Full git ref of the chip's local branch (`main` → `main`).
+impl CommitRef {
+    /// Accumulate `branch` into this logical chip (see `rebuild_refs`).
+    pub(crate) fn add_branch(&mut self, branch: &Branch) {
+        match branch.kind {
+            BranchType::Local => {
+                if let CommitRefKind::Branch { local, .. } = &mut self.kind {
+                    *local = true;
+                }
+            }
+            BranchType::Remote => {
+                if let (Some((remote, _)), CommitRefKind::Branch { remotes, .. }) =
+                    (branch.name.split_once('/'), &mut self.kind)
+                    && !remotes.iter().any(|r| r == remote)
+                {
+                    remotes.push(remote.into());
+                }
+            }
+        }
+    }
+
+    /// Chip sort order: local branches first, tags, remote-only branches.
+    pub(crate) fn order(&self) -> u8 {
+        match &self.kind {
+            CommitRefKind::Branch { local, .. } => {
+                if *local {
+                    0
+                } else {
+                    2
+                }
+            }
+            CommitRefKind::Tag => 1,
+        }
+    }
 }
 
 /// Which part of a file path the "Copy file path" submenu puts on the
@@ -400,6 +450,25 @@ impl Workspace {
         // Launch auto-check (throttled to once >> 24h; silent failures).
         this.maybe_check_for_updates(cx);
         this
+    }
+}
+
+impl Workspace {
+    /// Distinct remotes owning at least one branch (`origin` first),
+    /// the stable order behind the log's per-remote chip colors.
+    pub(crate) fn remote_names(&self) -> Vec<SharedString> {
+        let mut out: Vec<SharedString> = Vec::new();
+        for branch in &self.branches {
+            if let BranchType::Remote = branch.kind
+                && let Some((remote, _)) = branch.name.split_once('/')
+                && !out.iter().any(|r| r == remote)
+            {
+                out.push(remote.into());
+            }
+        }
+        // `origin` first (by configured-remote convention), then stable.
+        out.sort_by_key(|r| (r.as_ref() != "origin", r.clone()));
+        out
     }
 }
 
