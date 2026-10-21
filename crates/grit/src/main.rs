@@ -28,6 +28,7 @@ icon_assets!(
         Cloud,
         CloudDownload,
         Code,
+        Computer,
         EllipsisVertical,
         ExternalLink,
         FastForward,

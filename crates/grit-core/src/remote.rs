@@ -34,7 +34,9 @@ impl Repo {
     /// branches) stay forever and clutter the remotes tree.
     pub fn run_remote_op(&self, op: RemoteOp) -> Result<String> {
         match op {
-            RemoteOp::Fetch => self.run_git(&["fetch".to_string(), "--prune".to_string()]),
+            RemoteOp::Fetch => {
+                self.run_git(&["fetch".to_string(), "--all".to_string(), "--prune".to_string()])
+            }
             _ => self.run_git(&[op.name().to_string()]),
         }
     }

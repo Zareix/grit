@@ -17,7 +17,7 @@ use gpui_kit::*;
 use grit_core::branch::BranchType;
 
 use super::{Workspace, github_menu_items, integration_items};
-use crate::workspace::components::primitives::PrBadge;
+use crate::workspace::components::primitives::{PrBadge, chip_remotes, remote_color};
 
 /// Synthetic root/field ids follow `remote:<remote>` and
 /// `remote:<remote>/<segment>`; leaf ids are the full branch name, used by
@@ -117,7 +117,6 @@ pub(super) fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) ->
     let workspace_for_menu = workspace.clone();
 
     let tree = tree(&ws.remote_tree, move |ix, entry, _, _, cx| {
-        let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
         let is_folder = entry.is_folder();
         let depth = entry.depth();
@@ -125,7 +124,11 @@ pub(super) fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) ->
         let label = entry.item().label.clone();
 
         let (icon, color) = if depth == 0 {
-            (IconName::Cloud, foreground)
+            // The remote root's cloud carries the remote's chip color from
+            // the log (origin = info, deeper remotes cycle the palette).
+            let remote = id.strip_prefix(ROOT_PREFIX).unwrap_or(&id);
+            let globals = chip_remotes(&workspace, cx);
+            (IconName::Cloud, remote_color(&globals, remote, cx))
         } else if is_folder {
             let icon = if entry.is_expanded() { IconName::FolderOpen } else { IconName::Folder };
             (icon, muted)

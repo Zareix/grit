@@ -20,6 +20,7 @@ use gpui_kit::*;
 
 use super::REFS_W;
 use crate::workspace::components::branches::{branch_menu, remote_branch_menu, tag_menu};
+use crate::workspace::components::primitives::{chip_remotes, remote_color};
 use crate::workspace::{CommitRef, CommitRefKind, Workspace};
 use grit_core::Oid;
 use grit_core::branch::BranchType;
@@ -149,7 +150,7 @@ fn ref_chip(
                 if *local { theme.primary } else { remote_color(&globals, base_remote, cx) };
             let mut icons = Vec::new();
             if *local {
-                icons.push((IconName::GitBranch, theme.primary));
+                icons.push((IconName::Computer, theme.primary));
             }
             for remote in remotes {
                 icons.push((IconName::Cloud, remote_color(&globals, remote, cx)));
@@ -192,27 +193,6 @@ fn ref_chip(
     } else {
         base.into_any_element()
     }
-}
-
-/// The per-remote chip colors, in log-order: `origin` (= first remote)
-/// sits on `info`, deeper remotes cycle the other semantic tokens so
-/// `upstream/main` reads differently from `origin/main` at a glance.
-fn remote_color(globals: &[SharedString], remote: &str, cx: &App) -> gpui_kit::Hsla {
-    let theme = cx.theme();
-    match globals.iter().position(|g| g.as_ref() == remote) {
-        Some(0) | None => theme.info,
-        Some(1) => theme.success,
-        Some(2) => theme.warning,
-        Some(3) => theme.danger,
-        Some(ix) => [theme.info, theme.success, theme.warning, theme.danger][ix % 4],
-    }
-}
-
-/// Distinct remote names owning at least one branch (`origin` first).
-/// The chip palette indexes into this stable order, so colors agree
-/// across rows and refreshes.
-fn chip_remotes(workspace: &WeakEntity<Workspace>, cx: &App) -> Vec<SharedString> {
-    workspace.upgrade().map(|entity| entity.read(cx).remote_names()).unwrap_or_default()
 }
 
 /// The branches sidebar's menus on the log's ref chips — the merged chip

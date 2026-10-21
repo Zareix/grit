@@ -8,6 +8,29 @@ use gpui_kit::*;
 use grit_core::github::PrInfo;
 use grit_core::status::ChangeKind;
 
+use crate::workspace::{WeakEntity, Workspace};
+
+/// Distinct remotes owning at least one branch (`origin` first) — the
+/// stable order behind the per-remote chip colors (log chips and the
+/// remotes-tree roots read from the same mapping).
+pub fn chip_remotes(workspace: &WeakEntity<Workspace>, cx: &App) -> Vec<SharedString> {
+    workspace.upgrade().map(|entity| entity.read(cx).remote_names()).unwrap_or_default()
+}
+
+/// The per-remote color from a semantic palette cycling `info → success
+/// → warning → danger` (first remote = origin sits on `info`); unknown
+/// remotes fall back to `info`. Indexing comes from [`chip_remotes`].
+pub fn remote_color(globals: &[SharedString], remote: &str, cx: &App) -> gpui_kit::Hsla {
+    let theme = cx.theme();
+    match globals.iter().position(|g| g.as_ref() == remote) {
+        Some(0) | None => theme.info,
+        Some(1) => theme.success,
+        Some(2) => theme.warning,
+        Some(3) => theme.danger,
+        Some(ix) => [theme.info, theme.success, theme.warning, theme.danger][ix % 4],
+    }
+}
+
 /// Change-kind label + semantic color, shared by badge + text usages.
 pub fn kind_colors(
     kind: ChangeKind,
