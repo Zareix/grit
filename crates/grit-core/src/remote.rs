@@ -29,8 +29,14 @@ impl RemoteOp {
 
 impl Repo {
     /// Run a remote operation synchronously; call from a background thread.
+    /// The fetch prunes: without it, remote-tracking refs of branches
+    /// deleted upstream (Renovate post-merge cleanup, stale feature
+    /// branches) stay forever and clutter the remotes tree.
     pub fn run_remote_op(&self, op: RemoteOp) -> Result<String> {
-        self.run_git(&[op.name().to_string()])
+        match op {
+            RemoteOp::Fetch => self.run_git(&["fetch".to_string(), "--prune".to_string()]),
+            _ => self.run_git(&[op.name().to_string()]),
+        }
     }
 
     /// Run an arbitrary git subcommand synchronously (local `git` access only;
