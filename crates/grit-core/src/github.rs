@@ -35,11 +35,10 @@ const DEFAULT_EXPIRES_IN: u64 = 15 * 60;
 
 /// OAuth App client identifier. The Device Flow needs only this value (no
 /// client secret), but it must be the client id of a GitHub OAuth App
-/// registered with the Device Flow grant type enabled. An empty constant
-/// leaves sign-in disabled (an environment override covers dev builds):
-/// - constant: `CLIENT_ID` below,
-/// - override: `GRIT_GITHUB_CLIENT_ID` environment variable.
-const CLIENT_ID: &str = "";
+/// registered with the Device Flow grant type enabled — Grit's live
+/// registration (github.com/settings/developers). An environment override
+/// (`GRIT_GITHUB_CLIENT_ID`) covers dev builds pointing elsewhere.
+const CLIENT_ID: &str = "Ov23liRfaiuAUP3YDNf1";
 
 /// The client id to use for the Device Flow, `None` when sign-in is not
 /// configured. The environment override lets a dev-build test with a
