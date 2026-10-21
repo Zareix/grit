@@ -12,6 +12,7 @@ use gpui_kit::component::{
     menu::{PopupMenu, PopupMenuItem},
     tree::{TreeItem, tree},
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use grit_core::branch::BranchType;
 
@@ -132,6 +133,15 @@ pub(super) fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) ->
             (IconName::GitBranch, muted)
         };
 
+        // Leaves with an open PR show its `#n` chip beside the label — inside
+        // the icon/label flex row: ListItem stacks its children as blocks.
+        let pr = (!is_folder).then(|| workspace.upgrade()).flatten().and_then(|entity| {
+            let ws = entity.read(cx);
+            let remote = ws.github.remote.as_deref()?;
+            let short = id.strip_prefix(&format!("{remote}/"))?;
+            ws.github.prs.get(short).cloned()
+        });
+
         let mut item = ListItem::new(ix)
             .w_full()
             .min_w_0()
@@ -145,21 +155,9 @@ pub(super) fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) ->
                     .min_w_0()
                     .gap_1p5()
                     .child(Icon::new(icon).size_3().text_color(color))
-                    .child(div().min_w_0().truncate().child(label)),
+                    .child(div().min_w_0().truncate().child(label))
+                    .when_some(pr, |this, pr| this.child(PrBadge::new(&pr, cx))),
             );
-
-        // Leaves with an open PR show its `#n` chip after the label.
-        if !is_folder {
-            let pr = workspace.upgrade().and_then(|entity| {
-                let ws = entity.read(cx);
-                let remote = ws.github.remote.as_deref()?;
-                let short = id.strip_prefix(&format!("{remote}/"))?;
-                ws.github.prs.get(short).cloned()
-            });
-            if let Some(pr) = pr {
-                item = item.child(PrBadge::new(&pr, cx));
-            }
-        }
 
         // Folders expand/collapse through the tree itself; leaves reveal.
         if !is_folder {
