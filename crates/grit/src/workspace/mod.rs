@@ -22,6 +22,7 @@ use grit_core::{
     Oid, Repo,
     branch::Branch,
     commit::Commit,
+    github::{GitHubCoords, PrInfo},
     graph::GraphData,
     status::{FileEntry, Status},
     tags::Tag,
@@ -71,6 +72,25 @@ pub enum CreateTarget {
 
 /// A stash in the branches column's stash panel.
 pub type Stash = grit_core::stash::Stash;
+
+/// GitHub repo-scope state: the coordinates of the repo's GitHub remote
+/// plus the cached open-PR list (both read in background jobs from
+/// [`grit_core::github`]); the sign-in session is the app-level global.
+#[derive(Debug, Default)]
+pub(crate) struct GitHubState {
+    /// GitHub repo the remotes point at (`None` when found nowhere).
+    pub(crate) coords: Option<GitHubCoords>,
+    /// Remote name the `coords` came from (drives the remotes-tree menu).
+    pub(crate) remote: Option<String>,
+    /// Open PRs keyed by head branch name (short: `feat/x`, not `origin/feat/x`).
+    pub(crate) prs: HashMap<String, PrInfo>,
+    /// Monotonic generation counter (never reset with the struct: preserves
+    /// invalidation across repo switches); every new job takes its own.
+    pub(crate) seq: u64,
+    /// Last lookup attempt (throttle base; failures retry sooner).
+    pub(crate) last_pr_attempt: Option<std::time::Instant>,
+    pub(crate) last_pr_success: Option<std::time::Instant>,
+}
 
 /// What the auto-updater has last learned; rendered by the status bar and
 /// driven by the menu / button / dialogs.
@@ -255,6 +275,8 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Auto-updater state, surfaced in the status bar (see `UpdateState`).
     update_state: UpdateState,
+    /// GitHub repo coordinates + cached open PRs (see `GitHubState`).
+    github: GitHubState,
     /// Whether the auto-refresh timer loop is running (one per Workspace).
     auto_refresh_started: bool,
     /// When the last automatic refresh was triggered; compared against the
@@ -361,6 +383,7 @@ impl Workspace {
             diff_patch: None,
             error: None,
             update_state: UpdateState::Idle,
+            github: GitHubState::default(),
             auto_refresh_started: false,
             last_auto_refresh: None,
             last_fetch: None,

@@ -11,6 +11,7 @@ mod branches;
 mod commit;
 mod dialogs;
 mod fs;
+mod github;
 mod remote;
 mod update;
 
@@ -125,6 +126,8 @@ impl Workspace {
                 // The auto-refresh loop lives as long as this Workspace.
                 self.start_auto_refresh(cx);
                 self.refresh(cx);
+                // GitHub: resolve the repo's coordinates + PR cache hook.
+                self.init_github(cx);
             }
             Err(e) => {
                 self.repo = None;
@@ -173,6 +176,7 @@ impl Workspace {
             self.refresh(cx);
         }
         self.maybe_auto_fetch(now, cx);
+        self.maybe_refresh_github(now, cx);
         self.service_watcher(cx);
     }
 
@@ -457,6 +461,8 @@ impl Workspace {
                             format!("{label}: {out}").into()
                         });
                         this.refresh(cx);
+                        // A push/fetch may have changed the PR landscape.
+                        this.refresh_github_prs(cx);
                     }
                     Err(e) => {
                         this.error = Some(e.to_string().into());

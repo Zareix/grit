@@ -93,4 +93,11 @@ impl Repo {
         names.sort_by_key(|name| name != "origin");
         Ok(names)
     }
+
+    /// Fetch/push URL of a configured remote (None when unresolvable).
+    pub fn remote_url(&self, name: &str) -> Option<String> {
+        let repo = self.git2().ok()?;
+        let remote = repo.find_remote(name).ok()?;
+        remote.url().ok().map(str::to_owned)
+    }
 }

@@ -5,6 +5,7 @@
 
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::*;
+use grit_core::github::PrInfo;
 use grit_core::status::ChangeKind;
 
 /// Change-kind label + semantic color, shared by badge + text usages.
@@ -80,6 +81,33 @@ impl RenderOnce for SectionLabel {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.color)
             .child(self.title)
+    }
+}
+
+/// The `#42` open-PR chip beside a branch row; draft PRs render muted.
+#[derive(IntoElement)]
+pub struct PrBadge {
+    label: String,
+    color: gpui_kit::Hsla,
+}
+
+impl PrBadge {
+    pub fn new(pr: &PrInfo, cx: &App) -> Self {
+        let color = if pr.draft { cx.theme().muted_foreground } else { cx.theme().info };
+        Self { label: format!("#{}", pr.number), color }
+    }
+}
+
+impl RenderOnce for PrBadge {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        h_flex()
+            .px_1()
+            .rounded_sm()
+            .text_size(px(10.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(self.color)
+            .bg(self.color.opacity(0.15))
+            .child(self.label)
     }
 }
 

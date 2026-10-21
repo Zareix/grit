@@ -15,7 +15,8 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use grit_core::branch::BranchType;
 
-use super::{Workspace, integration_items};
+use super::{Workspace, github_menu_items, integration_items};
+use crate::workspace::components::primitives::PrBadge;
 
 /// Synthetic root/field ids follow `remote:<remote>` and
 /// `remote:<remote>/<segment>`; leaf ids are the full branch name, used by
@@ -147,6 +148,19 @@ pub(super) fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) ->
                     .child(div().min_w_0().truncate().child(label)),
             );
 
+        // Leaves with an open PR show its `#n` chip after the label.
+        if !is_folder {
+            let pr = workspace.upgrade().and_then(|entity| {
+                let ws = entity.read(cx);
+                let remote = ws.github.remote.as_deref()?;
+                let short = id.strip_prefix(&format!("{remote}/"))?;
+                ws.github.prs.get(short).cloned()
+            });
+            if let Some(pr) = pr {
+                item = item.child(PrBadge::new(&pr, cx));
+            }
+        }
+
         // Folders expand/collapse through the tree itself; leaves reveal.
         if !is_folder {
             item = item.on_click({
@@ -159,9 +173,13 @@ pub(super) fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) ->
         }
         item
     })
-    // Only leaves act; the empty menu never opens for folders.
+    // Only leaves act; folders carry no menu except the GitHub repo root.
     .context_menu(move |_ix, entry, menu, _, cx| {
         if entry.is_folder() {
+            if entry.depth() == 0 {
+                let remote = entry.item().id.strip_prefix(ROOT_PREFIX).unwrap_or_default();
+                return github_repo_menu(menu, remote, &workspace_for_menu, cx);
+            }
             return menu;
         }
         let name = entry.item().id.to_string();
@@ -171,8 +189,9 @@ pub(super) fn render_remote_tree(ws: &Workspace, cx: &mut Context<Workspace>) ->
     div().flex_1().min_h_0().px_1().child(tree)
 }
 
-/// Leaf menu: checkout as a local tracking branch, fast-forward / merge
-/// moves coherent with the remote tip, and delete the branch on its server.
+/// Leaves menu: checkout as a local tracking branch, fast-forward / merge
+/// moves coherent with the remote tip, delete on the server, and the
+/// GitHub entries (PR / branch commits).
 pub(crate) fn remote_branch_menu(
     mut menu: PopupMenu,
     name: &str,
@@ -209,5 +228,38 @@ pub(crate) fn remote_branch_menu(
         }
     }));
 
+    // GitHub web entries (PR page / commits view), keyed by short name.
+    let short = name.split_once('/').map(|(_, s)| s).unwrap_or(name).to_owned();
+    github_menu_items(menu, &short, workspace, cx)
+}
+
+/// The remote root's (depth-0) menu: open the repository on GitHub — only
+/// when this remote's URL resolved to GitHub coordinates (otherwise the
+/// empty menu never opens, like before).
+pub(crate) fn github_repo_menu(
+    mut menu: PopupMenu,
+    remote: &str,
+    workspace: &WeakEntity<Workspace>,
+    cx: &mut App,
+) -> PopupMenu {
+    let Some(entity) = workspace.upgrade() else { return menu };
+    let url = {
+        let ws = entity.read(cx);
+        ws.github
+            .remote
+            .as_deref()
+            .filter(|r| *r == remote)
+            .and_then(|_| ws.github.coords.as_ref().map(|c| c.web_url()))
+    };
+    if let Some(url) = url {
+        menu = menu.item(
+            PopupMenuItem::new("Open repository on GitHub").icon(IconName::Github).on_click({
+                let workspace = workspace.clone();
+                move |_, _, cx| {
+                    workspace.update(cx, |ws, cx| ws.open_github_url(url.clone(), cx)).ok();
+                }
+            }),
+        );
+    }
     menu
 }

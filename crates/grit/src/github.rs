@@ -96,6 +96,16 @@ pub(crate) fn sign_out(cx: &mut App) {
     session(cx).update(cx, |this, cx| this.sign_out(cx));
 }
 
+/// The cached token, `None` when signed out (read view for the features).
+pub(crate) fn token(cx: &App) -> Option<String> {
+    session(cx).read(cx).token.clone()
+}
+
+/// Whether a GitHub account is connected (phase SignedIn).
+pub(crate) fn signed_in(cx: &App) -> bool {
+    matches!(session(cx).read(cx).phase, GitHubPhase::SignedIn { .. })
+}
+
 // ---- session --------------------------------------------------------------
 
 impl GitHubSession {
