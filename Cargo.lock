@@ -2738,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "grit"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "dirs 7.0.0",
@@ -2752,7 +2752,7 @@ dependencies = [
 
 [[package]]
 name = "grit-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "git2",
  "notify",
