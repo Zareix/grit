@@ -39,6 +39,37 @@ fn commit_log_all_includes_every_ref() {
     assert!(ids.contains(&init));
 }
 
+/// The author date is precomputed at load (`Signature::local_date_time`):
+/// the log rows render it per row per frame, so it must be populated —
+/// an empty string here means the memoization regressed.
+#[test]
+fn author_date_time_is_precomputed() {
+    let t = TestRepo::new();
+    t.write_and_stage("a.txt", "1");
+    t.commit("init");
+
+    let commit = t.repo.commit_log(1).unwrap().remove(0);
+    let date = commit.author.date_time();
+    assert_eq!(date.len(), 16, "dd/mm/yyyy HH:MM");
+    let (day, rest) = date.split_at(2);
+    let (sep1, rest) = rest.split_at(1);
+    let (month, rest) = rest.split_at(2);
+    let (sep2, rest) = rest.split_at(1);
+    let (year, rest) = rest.split_at(4);
+    let (sep3, rest) = rest.split_at(1);
+    let (hour, colon, minute) = (rest.get(..2), rest.get(2..3), rest.get(3..5));
+    assert!(day.parse::<u32>().map(|d| (1..=31).contains(&d)).unwrap_or(false));
+    assert_eq!(sep1, "/");
+    assert!(month.parse::<u32>().map(|m| (1..=12).contains(&m)).unwrap_or(false));
+    assert_eq!(sep2, "/");
+    assert!((2020..=2100).contains(&year.parse::<i64>().unwrap_or(0)));
+    assert_eq!(sep3, " ");
+    assert!(hour.map(|h| h.parse::<u32>().map(|h| h < 24).unwrap_or(false)).unwrap_or(false));
+    assert_eq!(colon, Some(":"));
+    assert!(minute.map(|m| m.parse::<u32>().map(|m| m < 60).unwrap_or(false)).unwrap_or(false));
+    assert_eq!(date, commit.author.local_date_time, "method serves the cache");
+}
+
 #[test]
 fn commit_log_all_empty_repo_is_empty() {
     let t = TestRepo::new();

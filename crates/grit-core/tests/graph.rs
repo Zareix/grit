@@ -18,6 +18,7 @@ fn c(id: u8, parents: &[u8]) -> Commit {
         name: name.to_owned(),
         email: "test@example.com".to_owned(),
         time: git2::Time::new(0, 0),
+        local_date_time: String::new(),
     };
     Commit {
         id: oid(id),

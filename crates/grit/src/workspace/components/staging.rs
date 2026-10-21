@@ -20,18 +20,20 @@ use super::commit_box;
 use super::primitives::KindBadge;
 
 /// Theme colors needed by the row closures (they only get `&mut App`).
+/// Shared with the commit-details rows, which run under the same
+/// constraint.
 #[derive(Clone, Copy)]
-struct Colors {
-    border: gpui_kit::Hsla,
-    muted: gpui_kit::Hsla,
-    foreground: gpui_kit::Hsla,
-    accent: gpui_kit::Hsla,
-    success: gpui_kit::Hsla,
-    info: gpui_kit::Hsla,
-    danger: gpui_kit::Hsla,
+pub(crate) struct Colors {
+    pub(crate) border: gpui_kit::Hsla,
+    pub(crate) muted: gpui_kit::Hsla,
+    pub(crate) foreground: gpui_kit::Hsla,
+    pub(crate) accent: gpui_kit::Hsla,
+    pub(crate) success: gpui_kit::Hsla,
+    pub(crate) info: gpui_kit::Hsla,
+    pub(crate) danger: gpui_kit::Hsla,
 }
 
-fn colors(cx: &App) -> Colors {
+pub(crate) fn colors(cx: &App) -> Colors {
     let theme = cx.theme();
     Colors {
         border: theme.border,

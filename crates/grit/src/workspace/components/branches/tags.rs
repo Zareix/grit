@@ -48,25 +48,35 @@ pub(super) fn render_tags(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .text_color(muted)
                 .child("Tags"),
         )
-        // rows, most recent first (the snapshot sorts by target date).
-        // The rows sit in a `flex_none` wrapper inside the scroll area:
-        // one fixed content block instead of N children of a flex_1
-        // container, so the row pitch cannot stretch with the panel.
+        // rows, most recent first (the snapshot sorts by target date),
+        // virtualized like the staging lists: the closure gets `&mut App`
+        // only, state is read through the captured `WeakEntity`.
         .child(
-            v_flex().flex_1().min_h_0().id("tag-list").overflow_y_scroll().pb_1().child(
-                v_flex().flex_none().flex_col().children(
-                    ws.tags
-                        .iter()
-                        .map(|tag| {
-                            let on_remote = ws
-                                .remote_tags
-                                .as_ref()
-                                .is_some_and(|known| known.contains(tag.name.as_str()));
-                            tag_row(tag, on_remote, workspace.clone(), cx)
+            uniform_list("tag-list", ws.tags.len(), {
+                let workspace = workspace.clone();
+                move |range, _window, cx| {
+                    let Some(entity) = workspace.upgrade() else {
+                        return Vec::new();
+                    };
+                    let ws = entity.read(cx);
+                    range
+                        .map(|ix| match ws.tags.get(ix) {
+                            Some(tag) => {
+                                let on_remote = ws
+                                    .remote_tags
+                                    .as_ref()
+                                    .is_some_and(|known| known.contains(tag.name.as_str()));
+                                tag_row(tag, on_remote, workspace.clone(), cx)
+                            }
+                            None => div().id(format!("tag-empty-{ix}")).into_any_element(),
                         })
-                        .collect::<Vec<_>>(),
-                ),
-            ),
+                        .collect()
+                }
+            })
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .pb_1(),
         )
 }
 
@@ -77,7 +87,7 @@ fn tag_row(
     tag: &Tag,
     on_remote: bool,
     workspace: WeakEntity<Workspace>,
-    cx: &mut Context<Workspace>,
+    cx: &App,
 ) -> gpui_kit::AnyElement {
     let border = cx.theme().border;
     let foreground = cx.theme().foreground;

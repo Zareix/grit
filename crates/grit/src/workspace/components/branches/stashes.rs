@@ -50,25 +50,36 @@ pub(super) fn render_stashes(ws: &Workspace, cx: &mut Context<Workspace>) -> Div
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_stashes_collapsed(cx))),
                 ),
         )
-        // rows
-        .child(v_flex().flex_1().min_h_0().id("stash-list").overflow_y_scroll().pb_1().children(
-            if ws.stashes_collapsed {
-                Vec::new()
-            } else {
-                ws.stashes
-                    .iter()
-                    .map(|stash| stash_row(stash, workspace.clone(), cx))
-                    .collect::<Vec<_>>()
-            },
-        ))
+        // rows, virtualized like the staging lists: the closure gets
+        // `&mut App` only, state is read through the captured `WeakEntity`.
+        .child(if ws.stashes_collapsed {
+            v_flex().flex_1().min_h_0().into_any_element()
+        } else {
+            uniform_list("stash-list", ws.stashes.len(), {
+                let workspace = workspace.clone();
+                move |range, _window, cx| {
+                    let Some(entity) = workspace.upgrade() else {
+                        return Vec::new();
+                    };
+                    let ws = entity.read(cx);
+                    range
+                        .map(|ix| match ws.stashes.get(ix) {
+                            Some(stash) => stash_row(stash, workspace.clone(), cx),
+                            None => div().id(format!("stash-empty-{ix}")).into_any_element(),
+                        })
+                        .collect()
+                }
+            })
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .pb_1()
+            .into_any_element()
+        })
 }
 
 /// One stash entry line: archive icon + message, actions on right-click.
-fn stash_row(
-    stash: &Stash,
-    workspace: WeakEntity<Workspace>,
-    cx: &mut Context<Workspace>,
-) -> gpui_kit::AnyElement {
+fn stash_row(stash: &Stash, workspace: WeakEntity<Workspace>, cx: &App) -> gpui_kit::AnyElement {
     let muted = cx.theme().muted_foreground;
     let border = cx.theme().border;
     let foreground = cx.theme().foreground;

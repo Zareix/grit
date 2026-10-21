@@ -423,9 +423,10 @@ impl Render for Workspace {
                         )
                         .child(
                             resizable_panel().size(px(340.)).size_range(px(240.)..px(520.)).child(
-                                match self.selected_commit.clone() {
-                                    Some(_) => commit_details::render(self, cx),
-                                    None => staging::render(self, cx),
+                                if self.selected_commit.is_some() {
+                                    commit_details::render(self, cx)
+                                } else {
+                                    staging::render(self, cx)
                                 },
                             ),
                         ),

@@ -437,16 +437,12 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                                 // Stash rows sit between the WIP row and the
                                 // commits, newest (stash@{0}) first.
                                 if let Some(stash) = ws.stashes.get(offset) {
-                                    let commit = ws.stash_commits.get(offset).cloned().flatten();
-                                    return stash_row(
-                                        ws,
-                                        &list_ws,
-                                        stash,
-                                        commit.as_ref(),
-                                        gutter,
-                                        cx,
-                                    )
-                                    .into_any_element();
+                                    // Only borrowed for the row; no need to
+                                    // clone the whole commit per render.
+                                    let commit =
+                                        ws.stash_commits.get(offset).and_then(|c| c.as_ref());
+                                    return stash_row(ws, &list_ws, stash, commit, gutter, cx)
+                                        .into_any_element();
                                 }
                                 let index = offset - stash_count;
                                 match ws.log.get(index) {

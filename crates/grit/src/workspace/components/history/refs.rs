@@ -67,11 +67,17 @@ pub(super) fn ref_chips(
                         })
                         .child(format!("+{extra}")),
                 )
-                // Display-only chips: no menus inside the card.
-                .child({
-                    let chips: Vec<_> =
-                        more.iter().map(|r| ref_chip(r, workspace, false, 220., cx)).collect();
-                    v_flex().gap_0p5().children(chips)
+                // Display-only chips: no menus inside the card. Built
+                // lazily via `.content` — the builder only runs when the
+                // card opens (gpui-kit's documented perf pattern), instead
+                // of eagerly re-building every chip on every row render.
+                .content({
+                    let workspace = workspace.clone();
+                    move |_state, _window, cx| {
+                        let chips: Vec<_> =
+                            more.iter().map(|r| ref_chip(r, &workspace, false, 220., cx)).collect();
+                        v_flex().gap_0p5().children(chips)
+                    }
                 }),
         );
     }

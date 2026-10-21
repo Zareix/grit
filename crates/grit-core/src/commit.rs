@@ -12,6 +12,10 @@ pub struct Signature {
     pub email: String,
     /// Author time with its UTC offset (so it can be rendered in local time).
     pub time: git2::Time,
+    /// `date_time()` precomputed at construction. The log rows render this
+    /// per row on every frame — the civil-date math + `format!` there
+    /// showed up in profiles, while a `String` clone is a memcpy.
+    pub local_date_time: String,
 }
 
 /// A single commit (metadata only; the diff comes later).
@@ -170,11 +174,14 @@ impl Repo {
 }
 
 pub(crate) fn signature_to_owned(sig: git2::Signature<'_>, time: git2::Time) -> Signature {
-    Signature {
+    let mut out = Signature {
         name: sig.name().unwrap_or_default().to_owned(),
         email: sig.email().unwrap_or_default().to_owned(),
         time,
-    }
+        local_date_time: String::new(),
+    };
+    out.local_date_time = out.format_date_time();
+    out
 }
 
 /// Drain a configured revwalk into `Commit`s, at most `limit` of them.
@@ -201,7 +208,14 @@ fn collect_commits(
 impl Signature {
     /// Local wall-clock time of this signature, as `dd/mm/yyyy HH:MM`.
     /// The offset comes from git (the committer's local zone at the time).
+    /// Precomputed at construction — this returns a clone of the cached
+    /// string, not a fresh computation.
     pub fn date_time(&self) -> String {
+        self.local_date_time.clone()
+    }
+
+    /// The actual formatting, called once at construction.
+    fn format_date_time(&self) -> String {
         let local_secs = self.time.seconds() + self.time.offset_minutes() as i64 * 60;
         let days = local_secs.div_euclid(86_400);
         let secs = local_secs.rem_euclid(86_400);
