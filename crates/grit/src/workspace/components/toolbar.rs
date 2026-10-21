@@ -42,13 +42,23 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                 .child(remote_button("pull", "Pull", IconName::ArrowDown, RemoteOp::Pull, ws, cx))
                 .child(remote_button("push", "Push", IconName::ArrowUp, RemoteOp::Push, ws, cx)),
         )
-        // app launchers, next to the remote group: IDE + terminal
+        // app launchers, next to the remote group: GitHub + IDE + terminal
         .child(
             h_flex()
                 .gap_1()
                 .border_l_1()
                 .border_color(border.opacity(0.6))
                 .pl_2()
+                .child(
+                    Button::new("open-github")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Github)
+                        .label("GitHub")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.open_sign_in_dialog(window, cx)),
+                        ),
+                )
                 .child(
                     Button::new("open-ide")
                         .ghost()

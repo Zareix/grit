@@ -11,6 +11,7 @@ mod branches;
 mod commit;
 mod dialogs;
 mod fs;
+mod github;
 mod remote;
 mod update;
 
@@ -125,6 +126,9 @@ impl Workspace {
                 // The auto-refresh loop lives as long as this Workspace.
                 self.start_auto_refresh(cx);
                 self.refresh(cx);
+                // OAuth bootstrap: restore the Keychain token in the
+                // background (-signed-in state on a later tick).
+                self.init_github_auth(cx);
             }
             Err(e) => {
                 self.repo = None;

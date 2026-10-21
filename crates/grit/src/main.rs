@@ -30,6 +30,7 @@ icon_assets!(
         EllipsisVertical,
         FastForward,
         FileCode,
+        Github,
         GitCommitHorizontal,
         GitMerge,
         RotateCcw,

@@ -20,6 +20,9 @@ pub enum Error {
 
     #[error("git remote failed: {0}")]
     Remote(String),
+
+    #[error("GitHub: {0}")]
+    GitHub(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
