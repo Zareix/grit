@@ -14,7 +14,7 @@ anyhow = "1"
 thiserror = "2"
 
 # UI
-gpui-kit = "0.7.3"
+gpui-kit = "0.8.0"
 # Perf HUD (FRAME/P95/DROP/INV, CPU/GPU/MEM) — rendered only when
 # GRIT_FPS=1, so it costs nothing in normal runs.
 gpui-fps = "0.7.3"
