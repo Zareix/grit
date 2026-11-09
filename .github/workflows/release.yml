@@ -156,11 +156,30 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path target/release/grit.exe -DestinationPath "grit-${env:VERSION}-x64-windows.zip"
 
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = $env:VERSION -replace '^v', ''
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) {
+            Write-Error "ISCC.exe not found"
+            exit 1
+          }
+          & $iscc "/DMyAppVersion=$version" packaging.iss
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: grit-windows
-          path: grit-${{ github.ref_name }}-x64-windows.zip
+          path: |
+            grit-${{ github.ref_name }}-x64-windows.zip
+            dist/grit-*-x64-windows-setup.exe
           if-no-files-found: error
 
   build-linux:

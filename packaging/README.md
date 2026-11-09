@@ -22,3 +22,18 @@ python3 packaging/make_icon.py
 It renders `grit-icon.svg` at 1024px via QuickLook, insets the artwork into
 the 824×824 squircle mask (~185px radius), then emits the icns tiles and the
 Linux PNG.
+
+## Windows installer
+
+`packaging.iss` (repository root) builds the per-user Inno Setup 6 installer.
+After `cargo build --release -p grit`, from the repository root:
+
+```powershell
+ISCC.exe /DMyAppVersion=0.10.0 packaging.iss
+```
+
+Output: `dist/grit-<version>-x64-windows-setup.exe`. It installs under
+`%LOCALAPPDATA%\Programs\Grit` without UAC, adds the Start menu entry with
+AUMID `com.zareix.grit`, and leaves `%APPDATA%\grit` (settings + session) in
+place on uninstall. Sign `grit.exe` before ISCC and the setup afterwards when
+a code-signing certificate is available.
