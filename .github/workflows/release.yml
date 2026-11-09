@@ -188,6 +188,9 @@ jobs:
             exit 1
           }
           & $iscc "/DMyAppVersion=$version" packaging.iss
+          # Keep the artifact flat: the collect job checksums every top-level
+          # file and the release uploads `_assets/*`.
+          Copy-Item "dist\grit-$version-x64-windows-setup.exe" .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -195,7 +198,7 @@ jobs:
           name: grit-windows
           path: |
             grit-${{ github.ref_name }}-x64-windows.zip
-            dist/grit-*-x64-windows-setup.exe
+            grit-*-x64-windows-setup.exe
           if-no-files-found: error
 
   build-linux:
