@@ -6,6 +6,8 @@ Application icon sources and derived artifacts.
 - `grit-icon-1024.png` — master render, Apple Big Sur squircle shape
 - `grit.icns` — macOS bundle icon, deployed to `Contents/Resources/grit.icns`
   and referenced by `CFBundleIconFile` in the release workflow
+- `grit.ico` — multi-size Windows icon, embedded into `grit.exe` by
+  `crates/grit/build.rs` (Explorer, taskbar, Alt-Tab)
 - `grit.png` — 256×256 PNG for the Linux tarball's hicolor icon entry
 
 ## Regenerating

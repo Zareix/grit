@@ -44,11 +44,15 @@ impl Repo {
     /// Run an arbitrary git subcommand synchronously (local `git` access only;
     /// remote/auth flows stay in the shell).
     pub fn run_git(&self, args: &[String]) -> Result<String> {
-        let output = Command::new("git")
-            .args(["-c", "color.ui=never", "--no-pager"])
-            .args(args)
-            .current_dir(&self.path)
-            .output()?;
+        let mut command = Command::new("git");
+        command.args(["-c", "color.ui=never", "--no-pager"]).args(args).current_dir(&self.path);
+        // A GUI build has no console; keep git from allocating one.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let output = command.output()?;
 
         // fetch/pull/push write their report to stderr.
         let text = format!(

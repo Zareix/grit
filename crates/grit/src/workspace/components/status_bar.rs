@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -16,6 +17,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::workspace::{UpdateState, Workspace};
+
+/// Longest status message shown inline; the hover card keeps the full text.
+const MAX_STATUS_CHARS: usize = 80;
 
 pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     let border = cx.theme().border;
@@ -38,7 +42,23 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         )
         // transient info message (remote operation result)
         .when_some(ws.info.clone(), |this, info| {
-            this.child(clipped_message("status-info", info, cx.theme().success))
+            this.child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(clipped_message("status-info", info, cx.theme().success))
+                    .child(
+                        Button::new("dismiss-status-info")
+                            .ghost()
+                            .xsmall()
+                            .compact()
+                            .icon(IconName::Close)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.info = None;
+                                cx.notify();
+                            })),
+                    ),
+            )
         })
         .child(div().flex_1())
         // Auto-updater surface: an indeterminate phase reads as text, a
@@ -83,20 +103,35 @@ fn update_widget(ws: &Workspace, cx: &mut Context<Workspace>) -> Option<AnyEleme
     Some(element)
 }
 
-/// One-line clipped status message; hovering reveals the full text in a
-/// HoverCard.
+/// One-line clipped status message (capped at [`MAX_STATUS_CHARS`]); hovering
+/// reveals the full text in a HoverCard.
 fn clipped_message(id: &'static str, text: SharedString, color: Hsla) -> HoverCard {
     // git output carries explicit line breaks; whitespace_nowrap / truncate
     // never cut a '\n', so the trigger gets a whitespace-collapsed copy while
     // the hover card renders the original text.
-    let one_line: SharedString = text.split_whitespace().collect::<Vec<_>>().join(" ").into();
+    let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shown: SharedString = if one_line.chars().count() > MAX_STATUS_CHARS {
+        let mut short: String = one_line.chars().take(MAX_STATUS_CHARS).collect();
+        short.push('…');
+        short.into()
+    } else {
+        one_line.into()
+    };
 
     HoverCard::new(id)
         // Open above the trigger: the bar sits at the bottom of the window.
         .anchor(Anchor::BottomLeft)
         .open_delay(Duration::from_millis(300))
         .close_delay(Duration::from_millis(150))
-        .trigger(div().min_w_0().whitespace_nowrap().truncate().text_color(color).child(one_line))
+        .trigger(
+            div()
+                .min_w_0()
+                .max_w(px(420.))
+                .whitespace_nowrap()
+                .truncate()
+                .text_color(color)
+                .child(shown),
+        )
         .child(
             div()
                 .max_w(px(560.))

@@ -13,8 +13,10 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, TitleBar,
     button::{Button, ButtonVariants as _},
     h_flex,
+    menu::AppMenuBar,
     tab::{Tab, TabBar},
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use grit_core::Repo;
 
@@ -43,14 +45,22 @@ pub struct Session {
     known: Vec<String>,
     /// Session-level error, shown on the picker page.
     error: Option<SharedString>,
+    /// In-app menu bar for Windows/Linux (macOS uses the native menu).
+    app_menu_bar: Entity<AppMenuBar>,
 }
 
 impl Session {
     pub fn new(initial: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let data = persist::load();
+        let app_menu_bar = AppMenuBar::new(cx);
 
-        let mut this =
-            Self { tabs: Vec::new(), active: 0, known: normalize_known(data.known), error: None };
+        let mut this = Self {
+            tabs: Vec::new(),
+            active: 0,
+            known: normalize_known(data.known),
+            error: None,
+            app_menu_bar,
+        };
 
         // The CLI path, if given, opens as the first tab; otherwise the
         // persisted open tabs are restored (invalid paths are skipped and
@@ -359,7 +369,9 @@ impl Session {
 
         h_flex()
             .min_w_0()
-            .gap_1()
+            .gap_2()
+            // Windows/Linux draw the app menu here; macOS has the native one.
+            .when(!cfg!(target_os = "macos"), |this| this.child(self.app_menu_bar.clone()))
             .child(
                 TabBar::new("session-tabs")
                     .xsmall()

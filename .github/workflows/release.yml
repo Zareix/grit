@@ -141,13 +141,14 @@ jobs:
         run: cargo build --release --locked -p grit
 
       - name: Check binary version
-        # Binary prints the Cargo version; tag output carries a v prefix.
+        # Release builds use the Windows GUI subsystem (no console), so read
+        # the version metadata embedded by build.rs instead of stdout.
         shell: pwsh
         run: |
-          $binaryVersion = (& target\release\grit.exe --version).Trim()
-          $expected = "grit $($env:VERSION -replace '^v', '')"
-          if ($binaryVersion -ne $expected) {
-            Write-Error "Version mismatch: $binaryVersion != $expected"
+          $expected = $env:VERSION -replace '^v', ''
+          $actual = (Get-Item target\release\grit.exe).VersionInfo.ProductVersion
+          if ($actual -notlike "$expected*") {
+            Write-Error "Version mismatch: '$actual' != '$expected'"
             exit 1
           }
 

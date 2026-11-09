@@ -10,6 +10,7 @@ Outputs:
 - grit-icon-1024.png  master render, rounded
 - grit.png            256×256 (Linux hicolor entry)
 - grit.icns           every canonical macOS tile
+- grit.ico            Windows executable/window icon (multi-size)
 
 Requirements: macOS (`qlmanage` renders the SVG; `iconutil` builds the
 .icns) and Pillow (`python3 -m pip install pillow`).
@@ -48,6 +49,8 @@ ICNS_TILES = [
     (512, "icon_512x512.png"),
     (1024, "icon_512x512@2x.png"),
 ]
+
+ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 
 def render_master() -> Image.Image:
@@ -88,6 +91,9 @@ def main() -> None:
     # Linux hicolor entry.
     master.resize((256, 256), Image.LANCZOS).save(HERE / "grit.png")
 
+    # Windows executable/window icon; Explorer picks the closest tile.
+    master.save(HERE / "grit.ico", sizes=[(size, size) for size in ICO_SIZES])
+
     # macOS tiles (iconutil requires the folder to end in `.iconset`).
     with tempfile.TemporaryDirectory(suffix=".iconset", dir=HERE) as tmp:
         tiles = Path(tmp)
@@ -97,7 +103,7 @@ def main() -> None:
             ["iconutil", "-c", "icns", str(tiles), "-o", str(HERE / "grit.icns")],
             check=True,
         )
-    print(f"wrote {MASTER.name}, grit.png, grit.icns from {SVG.name}")
+    print(f"wrote {MASTER.name}, grit.png, grit.ico, grit.icns from {SVG.name}")
 
 
 if __name__ == "__main__":

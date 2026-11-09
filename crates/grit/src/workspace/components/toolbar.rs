@@ -5,6 +5,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
+    menu::{ContextMenuExt as _, PopupMenuItem},
 };
 use gpui_kit::*;
 use grit_core::remote::RemoteOp;
@@ -40,7 +41,30 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
                     cx,
                 ))
                 .child(remote_button("pull", "Pull", IconName::ArrowDown, RemoteOp::Pull, ws, cx))
-                .child(remote_button("push", "Push", IconName::ArrowUp, RemoteOp::Push, ws, cx)),
+                .child({
+                    // Right-click: force push the current branch to its
+                    // upstream (with confirmation).
+                    let weak = cx.entity().downgrade();
+                    let can_force = ws.remote_busy.is_none()
+                        && ws.current_branch.as_ref().is_some_and(|b| b.upstream.is_some());
+                    remote_button("push", "Push", IconName::ArrowUp, RemoteOp::Push, ws, cx)
+                        .context_menu(move |menu, _, _| {
+                            menu.item(
+                                PopupMenuItem::new("Force push…")
+                                    .icon(IconName::Upload)
+                                    .disabled(!can_force)
+                                    .on_click({
+                                        let weak = weak.clone();
+                                        move |_, window, cx| {
+                                            weak.update(cx, |ws, cx| {
+                                                ws.open_force_push_dialog(window, cx)
+                                            })
+                                            .ok();
+                                        }
+                                    }),
+                            )
+                        })
+                }),
         )
         // app launchers, next to the remote group: IDE + terminal
         .child(

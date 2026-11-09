@@ -297,33 +297,42 @@ impl Workspace {
 
     // ---- app launchers (IDE / terminal / agent) --------------------------
 
-    /// Open the repository in Zed; falls back to the system `open -a Zed`
-    /// when the `zed` CLI is not on PATH.
+    /// Open the repository in the configured IDE (default: `zed`, or `code`
+    /// on Windows). The repo path is appended to the command; on macOS a
+    /// missing `zed` CLI falls back to the system `open -a Zed`.
     pub(crate) fn open_in_ide(&mut self, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.clone() else { return };
         let path = repo.path.to_string_lossy().into_owned();
+        let command = settings::ide_command(cx);
         let job = cx.background_spawn(async move {
-            try_open(&[
-                ("zed".to_string(), vec![path.clone()]),
-                ("open".to_string(), vec!["-a".to_string(), "Zed".to_string(), path]),
-            ])
+            let mut candidates = vec![command_with_path(&command, &path)?];
+            if cfg!(target_os = "macos") && candidates[0].0 == "zed" {
+                candidates
+                    .push(("open".to_string(), vec!["-a".to_string(), "Zed".to_string(), path]));
+            }
+            try_open(&candidates)
         });
         self.run_launcher("ide", job, cx);
     }
 
-    /// Open the repository in a Warp terminal; Warp is driven through its
-    /// `warp://` deep link (new tab with the repo path), with the plain
-    /// `open -a Warp <path>` launch as fallback.
+    /// Open the repository in the configured terminal (default: `warp`, or
+    /// `wt -d` on Windows). The repo path is appended to the command; on
+    /// macOS `warp` keeps using its `warp://` deep link (new tab with the
+    /// repo path), with the plain `open -a Warp <path>` launch as fallback.
     pub(crate) fn open_in_terminal(&mut self, cx: &mut Context<Self>) {
         let Some(repo) = self.repo.clone() else { return };
         let path = repo.path.to_string_lossy().into_owned();
-        // Basic percent-encoding for the URL scheme (space only is realistic).
-        let encoded = path.replace(' ', "%20");
+        let command = settings::terminal_command(cx);
         let job = cx.background_spawn(async move {
-            try_open(&[
-                ("open".to_string(), vec![format!("warp://action/new_tab?path={encoded}")]),
-                ("open".to_string(), vec!["-a".to_string(), "Warp".to_string(), path]),
-            ])
+            if cfg!(target_os = "macos") && command.eq_ignore_ascii_case("warp") {
+                // Basic percent-encoding for the URL scheme (space only is realistic).
+                let encoded = path.replace(' ', "%20");
+                return try_open(&[
+                    ("open".to_string(), vec![format!("warp://action/new_tab?path={encoded}")]),
+                    ("open".to_string(), vec!["-a".to_string(), "Warp".to_string(), path]),
+                ]);
+            }
+            try_open(&[command_with_path(&command, &path)?])
         });
         self.run_launcher("terminal", job, cx);
     }
@@ -385,13 +394,42 @@ fn toml_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Split a configured command (`program args…`) and append the repo path as
+/// the final argument. Arguments are whitespace-separated; paths are passed
+/// as one argument, so spaces in the repo path are safe.
+fn command_with_path(command: &str, path: &str) -> Result<(String, Vec<String>), String> {
+    let mut parts = command.split_whitespace();
+    let program = parts.next().ok_or_else(|| "command is empty".to_string())?;
+    let mut args: Vec<String> = parts.map(str::to_string).collect();
+    args.push(path.to_string());
+    Ok((program.to_string(), args))
+}
+
+/// Spawn a launcher. On Windows `cmd /C` is required for `.cmd` shims such
+/// as VS Code's `code`, which CreateProcess cannot run directly.
+fn spawn(program: &str, args: &[String]) -> std::io::Result<std::process::Output> {
+    if cfg!(target_os = "windows") {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.arg("/C").arg(program).args(args);
+        // The GUI build has no console; `cmd` must not flash one.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        cmd.output()
+    } else {
+        std::process::Command::new(program).args(args).output()
+    }
+}
+
 /// Run each candidate launcher command until one exits successfully; the
 /// returned `Err` carries the last failure. Commands run detached from the
 /// UI on the background executor.
 fn try_open(commands: &[(String, Vec<String>)]) -> Result<(), String> {
     let mut last = String::from("no launcher available");
     for (program, args) in commands {
-        match std::process::Command::new(program).args(args).output() {
+        match spawn(program, args) {
             Ok(out) if out.status.success() => return Ok(()),
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -405,4 +443,21 @@ fn try_open(commands: &[(String, Vec<String>)]) -> Result<(), String> {
         }
     }
     Err(last)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_with_path;
+
+    #[test]
+    fn command_appends_path_as_one_argument() {
+        let (program, args) = command_with_path("wt -d", r"C:\repos\my project").unwrap();
+        assert_eq!(program, "wt");
+        assert_eq!(args, ["-d", r"C:\repos\my project"]);
+    }
+
+    #[test]
+    fn empty_command_is_rejected() {
+        assert!(command_with_path("   ", "/repo").is_err());
+    }
 }

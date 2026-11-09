@@ -143,6 +143,34 @@ impl Workspace {
         self.run_git_remote("push", args, cx);
     }
 
+    /// Confirm dialog for the Push button's right-click "Force push" entry.
+    pub(crate) fn open_force_push_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(branch) = self.current_branch.clone() else {
+            self.error = Some("Cannot force push: no current branch".into());
+            cx.notify();
+            return;
+        };
+        let Some(upstream) = branch.upstream.clone() else {
+            self.error = Some("Cannot force push: no upstream branch".into());
+            cx.notify();
+            return;
+        };
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Force push?",
+                question: format!("Force push \"{}\" to \"{upstream}\"?", branch.name),
+                detail: "The remote branch is overwritten with the local tip. \
+                         --force-with-lease still refuses if the remote moved since \
+                         the last fetch."
+                    .into(),
+                confirm_label: "Force push",
+            },
+            |ws, cx| ws.force_push(cx),
+            window,
+            cx,
+        );
+    }
+
     /// Dialog asking to publish a branch as `<remote>/<branch>` and set it as
     /// upstream (`push --set-upstream`).
     pub(crate) fn open_upstream_dialog(

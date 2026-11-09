@@ -1,5 +1,9 @@
 //! Grit — a native Git client built in Rust with GPUI Kit.
 
+// Windows release builds are GUI-subsystem binaries: no console window opens
+// before the app. Debug builds keep the console for logs.
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 mod about;
 mod github;
 mod session;
@@ -7,8 +11,8 @@ mod settings;
 mod workspace;
 
 use gpui_kit::assets::{Assets as ComponentAssets, icon_assets};
-use gpui_kit::component::TitleBar;
 use gpui_kit::component::theme::Theme;
+use gpui_kit::component::{GlobalState, TitleBar};
 use gpui_kit::*;
 use std::borrow::Cow;
 
@@ -93,7 +97,8 @@ fn route_tab_action(
 
 fn main() {
     // Optional --version: standard CLI flag, mirrored by the CI release
-    // check that the repackaged binary matches the packaged version.
+    // check on macOS/Linux (Windows release builds have no console, so CI
+    // reads the version embedded in grit.exe instead).
     if std::env::args().skip(1).any(|a| a == "--version" || a == "-V") {
         println!("grit {}", about::VERSION);
         return;
@@ -113,6 +118,10 @@ fn main() {
         // Keychain in the background.
         github::init(cx);
 
+        // Stable process identity for the OS (Windows taskbar / notifications;
+        // no-op elsewhere). Matches the macOS bundle identifier.
+        cx.set_app_identity("com.zareix.grit", "Grit");
+
         // Follow the system appearance from startup (sync_system_appearance
         // with no window reads `cx.window_appearance()`); each window then
         // observes appearance changes below.
@@ -128,6 +137,16 @@ fn main() {
             // Standard macOS Settings shortcut (⌘,).
             KeyBinding::new("cmd-,", Settings, None),
         ]);
+        // Windows/Linux have no native menu bar: the in-app AppMenuBar and
+        // these Control-based shortcuts mirror the macOS menu commands.
+        if !cfg!(target_os = "macos") {
+            cx.bind_keys([
+                KeyBinding::new("ctrl-q", Quit, None),
+                KeyBinding::new("ctrl-w", CloseTab, None),
+                KeyBinding::new("ctrl-t", NewTab, None),
+                KeyBinding::new("ctrl-,", Settings, None),
+            ]);
+        }
         cx.on_action(|_: &Quit, cx| cx.quit());
         // Tab commands: bound without context (global), routed to the
         // active window's root Session.
@@ -141,21 +160,36 @@ fn main() {
             })
         });
         // macOS app menu, About first (convention), Settings + update check
-        // under it, Quit last.
-        cx.set_menus([Menu::new("Grit").items([
+        // under it, Quit last. Services is macOS-only; the in-app menu bar
+        // rendered on Windows/Linux gets the same actions without it.
+        let mut menu_items = vec![
             MenuItem::action("About Grit", About),
             MenuItem::action("Check for Updates", CheckForUpdates),
             MenuItem::action("Settings…", Settings),
             MenuItem::separator(),
+        ];
+        #[cfg(target_os = "macos")]
+        menu_items.extend([
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Quit", Quit),
-        ])]);
+        ]);
+        menu_items.push(MenuItem::action("Quit", Quit));
+        cx.set_menus([Menu::new("Grit").items(menu_items)]);
+        // gpui-component's AppMenuBar (Windows/Linux) reads the menus from
+        // GlobalState; `set_menus` only feeds the native platform.
+        if let Some(menus) = cx.get_menus() {
+            GlobalState::global_mut(cx).set_app_menus(menus);
+        }
 
         // TitleBar::window_options() gives the app a custom title bar drawn
         // by the TitleBar element itself (tabs align with the native window
         // buttons; on macOS the traffic lights sit at (9, 9)).
         let mut options = TitleBar::window_options();
+        // The custom title bar leaves the OS title unset; Windows uses it for
+        // the taskbar and Alt-Tab, so name the window.
+        if let Some(titlebar) = options.titlebar.as_mut() {
+            titlebar.title = Some("Grit".into());
+        }
         // Open at ~80% of the screen, centered on it but nudged upward so
         // the macOS dock does not overlap the bottom of the window.
         const DOCK_NUDGE: f32 = 32.0;

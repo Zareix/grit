@@ -1,8 +1,8 @@
 //! App settings: global state + persistence, and the Settings window opened
 //! from the macOS menu bar ("Settings…", ⌘,).
 //!
-//! Holds the Agent launcher command and the background auto-refresh
-//! controls (toggle + status refresh / fetch intervals).
+//! Holds the Agent / IDE / terminal launcher commands and the background
+//! auto-refresh controls (toggle + status refresh / fetch intervals).
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::ActiveTheme as _;
@@ -19,6 +19,17 @@ use crate::github;
 
 /// Command run in the launched Agent terminal tab.
 const DEFAULT_AGENT_COMMAND: &str = "opencode -c";
+
+/// Command run by the toolbar's IDE button; the repo path is appended.
+fn default_ide_command() -> &'static str {
+    if cfg!(target_os = "windows") { "code" } else { "zed" }
+}
+
+/// Command run by the toolbar's Terminal button; the repo path is appended.
+/// On Windows, Windows Terminal takes the directory through `-d`.
+fn default_terminal_command() -> &'static str {
+    if cfg!(target_os = "windows") { "wt -d" } else { "warp" }
+}
 
 /// Default seconds between background status reloads.
 const DEFAULT_AUTO_REFRESH_SECS: u32 = 10;
@@ -37,6 +48,10 @@ const MAX_AUTO_FETCH_SECS: u32 = 86_400;
 pub(crate) struct GritSettings {
     /// Command run in the Agent terminal tab.
     pub(crate) agent_command: String,
+    /// Command run by the toolbar's IDE button.
+    pub(crate) ide_command: String,
+    /// Command run by the toolbar's Terminal button.
+    pub(crate) terminal_command: String,
     /// Whether status / branches / log reload periodically in the background.
     pub(crate) auto_refresh_enabled: bool,
     /// Seconds between background status reloads.
@@ -49,6 +64,8 @@ impl Default for GritSettings {
     fn default() -> Self {
         Self {
             agent_command: DEFAULT_AGENT_COMMAND.into(),
+            ide_command: default_ide_command().into(),
+            terminal_command: default_terminal_command().into(),
             auto_refresh_enabled: true,
             auto_refresh_interval_secs: DEFAULT_AUTO_REFRESH_SECS,
             auto_fetch_interval_secs: DEFAULT_AUTO_FETCH_SECS,
@@ -74,6 +91,23 @@ impl GritSettings {
 pub(crate) fn agent_command(cx: &App) -> String {
     match GritSettings::global(cx).agent_command.trim() {
         "" => DEFAULT_AGENT_COMMAND.to_string(),
+        command => command.to_string(),
+    }
+}
+
+/// The IDE command, with the same empty-value fallback as the agent command.
+pub(crate) fn ide_command(cx: &App) -> String {
+    match GritSettings::global(cx).ide_command.trim() {
+        "" => default_ide_command().to_string(),
+        command => command.to_string(),
+    }
+}
+
+/// The terminal command, with the same empty-value fallback as the agent
+/// command.
+pub(crate) fn terminal_command(cx: &App) -> String {
+    match GritSettings::global(cx).terminal_command.trim() {
+        "" => default_terminal_command().to_string(),
         command => command.to_string(),
     }
 }
@@ -168,10 +202,11 @@ impl Render for SettingsWindow {
 /// The "General" page: the Agent launcher, then the background auto-refresh
 /// controls.
 fn general_page() -> SettingPage {
-    SettingPage::new("General")
-        .icon(IconName::Settings)
-        .resettable(true)
-        .groups(vec![agent_group(), auto_refresh_group()])
+    SettingPage::new("General").icon(IconName::Settings).resettable(true).groups(vec![
+        agent_group(),
+        tools_group(),
+        auto_refresh_group(),
+    ])
 }
 
 /// The "GitHub" page: the OAuth Device Flow sign-in panel (status, the
@@ -202,6 +237,44 @@ fn agent_group() -> SettingGroup {
         .description("Command run in the Grit Agent tab (`warp://tab_config/grit-agent`).")
         .layout(Axis::Vertical),
     )
+}
+
+/// The IDE and terminal launcher commands used by the toolbar buttons.
+fn tools_group() -> SettingGroup {
+    SettingGroup::new().title("Tools").items(vec![
+        SettingItem::new(
+            "IDE command",
+            SettingField::input(
+                |cx: &App| GritSettings::global(cx).ide_command.clone().into(),
+                |val: SharedString, cx: &mut App| {
+                    GritSettings::global_mut(cx).ide_command = val.to_string();
+                    save(cx);
+                },
+            )
+            .default_value(default_ide_command()),
+        )
+        .description(
+            "Opened by the toolbar IDE button; the repository path is appended \
+             (default: `zed`, `code` on Windows).",
+        )
+        .layout(Axis::Vertical),
+        SettingItem::new(
+            "Terminal command",
+            SettingField::input(
+                |cx: &App| GritSettings::global(cx).terminal_command.clone().into(),
+                |val: SharedString, cx: &mut App| {
+                    GritSettings::global_mut(cx).terminal_command = val.to_string();
+                    save(cx);
+                },
+            )
+            .default_value(default_terminal_command()),
+        )
+        .description(
+            "Opened by the toolbar Terminal button; the repository path is appended \
+             (default: `warp` on macOS, `wt -d` on Windows).",
+        )
+        .layout(Axis::Vertical),
+    ])
 }
 
 /// Background auto-refresh: toggle + refresh / fetch intervals.
