@@ -97,8 +97,24 @@ jobs:
           mkdir -p dmg-root
           cp -R grit.app dmg-root/grit.app
           ln -s /Applications dmg-root/Applications
-          hdiutil create -volname Grit -srcfolder dmg-root \
-            -format UDZO "grit-${VERSION}-aarch64-macos.dmg"
+
+          DMG="grit-${VERSION}-aarch64-macos.dmg"
+          VOLUME="Grit ${VERSION#v}"
+          # XProtect intermittently locks a freshly written image on hosted
+          # runners (hdiutil "Resource busy"); retry with a growing pause.
+          for attempt in 1 2 3 4 5; do
+            rm -f "$DMG"
+            if hdiutil create -volname "$VOLUME" -srcfolder dmg-root \
+              -fs HFS+ -format UDZO -ov "$DMG"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "hdiutil create failed after $attempt attempts" >&2
+              exit 1
+            fi
+            hdiutil detach "/Volumes/$VOLUME" 2>/dev/null || true
+            sleep $((attempt * 5))
+          done
 
       - name: Notarize dmg
         run: |
