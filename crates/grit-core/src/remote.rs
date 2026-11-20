@@ -46,6 +46,9 @@ impl Repo {
     pub fn run_git(&self, args: &[String]) -> Result<String> {
         let mut command = Command::new("git");
         command.args(["-c", "color.ui=never", "--no-pager"]).args(args).current_dir(&self.path);
+        // No terminal: an editor git would launch (merge / rebase / pick
+        // continuation) must accept the prepared message instead of blocking.
+        command.env("GIT_EDITOR", "true");
         // A GUI build has no console; keep git from allocating one.
         #[cfg(windows)]
         {

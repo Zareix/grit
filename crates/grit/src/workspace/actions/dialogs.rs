@@ -74,6 +74,25 @@ impl Workspace {
         );
     }
 
+    /// Abort confirm dialog (a merge / rebase mid-flight): the operation's
+    /// pending work, resolutions included, is discarded.
+    pub(crate) fn open_abort_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(op) = self.operation else { return };
+        self.open_confirm_dialog(
+            ConfirmSpec {
+                title: "Abort operation?",
+                question: format!("Abort the {} in progress?", op.label().to_lowercase()),
+                detail: "The working tree returns to its state before the operation; any \
+                         conflict resolution already applied is discarded."
+                    .into(),
+                confirm_label: "Abort",
+            },
+            move |ws, cx| ws.abort_operation(cx),
+            window,
+            cx,
+        );
+    }
+
     /// Delete confirm dialog: the file leaves the working tree.
     pub(crate) fn open_delete_dialog(
         &mut self,

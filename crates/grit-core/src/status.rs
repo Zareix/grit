@@ -83,6 +83,54 @@ impl Status {
     }
 }
 
+/// A multi-commit git operation the repository is in the middle of: the
+/// worktree holds its conflicts until the user continues or aborts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+}
+
+impl Operation {
+    pub fn label(self) -> &'static str {
+        match self {
+            Operation::Merge => "Merge",
+            Operation::Rebase => "Rebase",
+            Operation::CherryPick => "Cherry-pick",
+            Operation::Revert => "Revert",
+        }
+    }
+
+    /// `git <op> --continue` argument list (finishes once the index is
+    /// clean; the commit message comes from the prepared one).
+    pub fn continue_args(self) -> Vec<String> {
+        let op = match self {
+            Operation::Merge => "merge",
+            Operation::Rebase => "rebase",
+            Operation::CherryPick => "cherry-pick",
+            Operation::Revert => "revert",
+        };
+        vec![op.to_string(), "--continue".to_string()]
+    }
+
+    /// `git <op> --abort` argument list (drops the operation's work).
+    pub fn abort_args(self) -> Vec<String> {
+        let mut args = self.continue_args();
+        args[1] = "--abort".to_string();
+        args
+    }
+}
+
+/// A side of a conflict that deleted the file (stage 2 = this branch's side,
+/// stage 3 = the incoming one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictSide {
+    Ours,
+    Theirs,
+}
+
 /// Status bits that mean "changed between HEAD and the index".
 fn staged_mask() -> GitStatus {
     GitStatus::INDEX_NEW
@@ -103,6 +151,86 @@ fn unstaged_mask() -> GitStatus {
 }
 
 impl Repo {
+    /// The operation the repository is in the middle of, if any.
+    pub fn operation(&self) -> Option<Operation> {
+        match self.git2().ok()?.state() {
+            git2::RepositoryState::Merge => Some(Operation::Merge),
+            git2::RepositoryState::Rebase
+            | git2::RepositoryState::RebaseInteractive
+            | git2::RepositoryState::RebaseMerge => Some(Operation::Rebase),
+            git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => {
+                Some(Operation::CherryPick)
+            }
+            git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => {
+                Some(Operation::Revert)
+            }
+            _ => None,
+        }
+    }
+
+    /// Working-tree text of `path`, conflict markers included: the input of
+    /// the conflict viewer.
+    pub fn working_file_text(&self, path: impl AsRef<Path>) -> Result<String> {
+        Ok(std::fs::read_to_string(self.path.join(path.as_ref()))?)
+    }
+
+    /// Write the resolved text of a conflicted file and stage it — the
+    /// `git add` half of a conflict resolution, which marks the conflict
+    /// resolved for the in-progress operation.
+    pub fn resolve_file(&self, path: impl AsRef<Path>, text: &str) -> Result<()> {
+        std::fs::write(self.path.join(path.as_ref()), text)?;
+        self.stage_file(path)
+    }
+
+    /// The side that deleted an unmerged path, when one did (a
+    /// modify/delete conflict: git keeps the surviving side in the worktree,
+    /// without markers). `None` for a content conflict or a clean path.
+    pub fn deleted_side(&self, path: impl AsRef<Path>) -> Result<Option<ConflictSide>> {
+        let index = self.git2()?.index()?;
+        let path = path.as_ref();
+        let present = |stage: i32| index.get_path(path, stage).is_some();
+        Ok(match (present(2), present(3)) {
+            (false, true) => Some(ConflictSide::Ours),
+            (true, false) => Some(ConflictSide::Theirs),
+            _ => None,
+        })
+    }
+
+    /// Drop a conflicted file from the index and the working tree: the
+    /// `git rm` resolution of a modify/delete conflict.
+    pub fn remove_conflicted(&self, path: impl AsRef<Path>) -> Result<()> {
+        let repo = self.git2()?;
+        let path = path.as_ref();
+        let mut index = repo.index()?;
+        // Removes the path's conflict stages too.
+        index.remove_path(path)?;
+        index.write()?;
+        std::fs::remove_file(self.path.join(path)).ok();
+        Ok(())
+    }
+
+    /// Branch names of an in-progress merge: the checked-out side (ours) and
+    /// the ref being merged in (theirs, resolved from `MERGE_HEAD`). Either
+    /// name is `None` when it cannot be resolved (merging a bare commit, or
+    /// no merge at all).
+    pub fn merge_sides(&self) -> (Option<String>, Option<String>) {
+        let Ok(mut repo) = self.git2() else { return (None, None) };
+        let ours = repo
+            .head()
+            .ok()
+            .and_then(|head| head.shorthand().ok().map(str::to_owned))
+            .filter(|name| name != "HEAD");
+
+        let mut merge_head = None;
+        repo.mergehead_foreach(|oid| {
+            merge_head = Some(*oid);
+            false // first parent only: one MERGE_HEAD per merge
+        })
+        .ok();
+
+        (ours, merge_head.and_then(|oid| branch_at(&repo, oid)))
+    }
+
     /// Compute the working tree status.
     pub fn status(&self) -> Result<Status> {
         let repo = self.git2()?;
@@ -233,4 +361,20 @@ impl Repo {
         repo.checkout_head(Some(&mut checkout))?;
         Ok(())
     }
+}
+
+/// Short name of the branch (local first, then remote-tracking) pointing at
+/// `oid`, for banners naming the two sides of a merge.
+fn branch_at(repo: &git2::Repository, oid: git2::Oid) -> Option<String> {
+    for (pattern, prefix) in [("refs/heads/*", "refs/heads/"), ("refs/remotes/*", "refs/remotes/")]
+    {
+        let refs = repo.references_glob(pattern).ok()?;
+        for reference in refs.flatten() {
+            if reference.target() == Some(oid) {
+                let name = reference.name().ok()?;
+                return name.strip_prefix(prefix).map(str::to_owned);
+            }
+        }
+    }
+    None
 }

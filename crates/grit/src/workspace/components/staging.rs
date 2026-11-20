@@ -60,6 +60,8 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         .w_full()
         .h_full()
         .flex_none()
+        // In-progress operation banner (merge / rebase / pick).
+        .when_some(ws.operation, |this, op| this.child(operation_banner(ws, op, cx)))
         // --- unstaged section ---
         .when(unstaged_len > 0, |this| {
             this.child(section_header("Changes", unstaged_len, false, cx))
@@ -323,6 +325,74 @@ fn file_menu(
             }
         }));
     menu
+}
+
+/// Banner over the staging lists while a multi-commit operation is open:
+/// what is being integrated, how many conflicts are left, Continue once the
+/// index is clean, Abort.
+fn operation_banner(ws: &Workspace, op: grit_core::Operation, cx: &mut Context<Workspace>) -> Div {
+    let theme = cx.theme();
+    let (warning, muted) = (theme.warning, theme.muted_foreground);
+    let conflicts = ws.status.count(grit_core::status::ChangeKind::Conflicted);
+    let busy = ws.remote_busy.is_some();
+    let detail = match conflicts {
+        0 => "No conflicts left — continue when ready.".to_string(),
+        1 => "1 conflicted file left.".to_string(),
+        n => format!("{n} conflicted files left."),
+    };
+    let (ours, theirs) = (&ws.merge_sides.0, &ws.merge_sides.1);
+    let title = match (op, ours, theirs) {
+        (grit_core::Operation::Merge, Some(ours), Some(theirs)) => {
+            format!("Merging {theirs} into {ours}")
+        }
+        (grit_core::Operation::Merge, Some(ours), None) => format!("Merging into {ours}"),
+        (op, _, _) => format!("{} in progress", op.label()),
+    };
+
+    h_flex()
+        .flex_none()
+        .px_2()
+        .py_1p5()
+        .gap_2()
+        .items_center()
+        .justify_between()
+        .border_b_1()
+        .border_color(warning.opacity(0.4))
+        .bg(warning.opacity(0.12))
+        .child(
+            v_flex()
+                .min_w_0()
+                .gap_0p5()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(warning)
+                        .child(title),
+                )
+                .child(div().text_size(px(10.)).text_color(muted).child(detail)),
+        )
+        .child(
+            h_flex()
+                .gap_1()
+                .child(
+                    Button::new("operation-continue")
+                        .xsmall()
+                        .label("Continue")
+                        .disabled(busy || conflicts > 0)
+                        .on_click(cx.listener(|this, _, _, cx| this.continue_operation(cx))),
+                )
+                .child(
+                    Button::new("operation-abort")
+                        .ghost()
+                        .xsmall()
+                        .label("Abort")
+                        .disabled(busy)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.open_abort_dialog(window, cx)),
+                        ),
+                ),
+        )
 }
 
 /// Fixed section header: title + count + stage/unstage-all command. Always

@@ -16,12 +16,13 @@ mod remote;
 mod update;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::diff::{DiffFile, DiffMode};
+use gpui_kit::component::diff::{DiffFile, DiffFileStatus, DiffMode};
 use gpui_kit::*;
 use grit_core::{
-    Oid, Repo,
+    Oid, Operation, Repo,
     branch::{Branch, BranchType},
     commit::Commit,
     graph::GraphData,
@@ -40,6 +41,11 @@ pub(crate) const MAX_LOG_COMMITS: usize = 500;
 /// it on the UI thread when ready.
 struct RepoSnapshot {
     status: Status,
+    /// Merge / rebase / pick left mid-flight, if any.
+    operation: Option<Operation>,
+    /// `(ours, theirs)` branch names of an in-progress merge, for the
+    /// banners (`Merging feature into main`).
+    merge_sides: (Option<String>, Option<String>),
     branches: Vec<Branch>,
     current_branch: Option<Branch>,
     tags: Vec<Tag>,
@@ -64,6 +70,8 @@ impl RepoSnapshot {
         previous_relations: &HashMap<Oid, HashMap<Oid, (usize, usize)>>,
     ) -> grit_core::Result<Self> {
         let status = repo.status()?;
+        let operation = repo.operation();
+        let merge_sides = repo.merge_sides();
         let branches = repo.branches()?;
         let current_branch = repo.current_branch()?;
         let tags = repo.tags()?;
@@ -83,6 +91,8 @@ impl RepoSnapshot {
 
         Ok(Self {
             status,
+            operation,
+            merge_sides,
             branches,
             current_branch,
             tags,
@@ -103,6 +113,8 @@ impl RepoSnapshot {
         tags.sort_by_key(|t| std::cmp::Reverse(t.date));
         tags == ws.tags
             && self.status == ws.status
+            && self.operation == ws.operation
+            && self.merge_sides == ws.merge_sides
             && self.branches == ws.branches
             && self.current_branch == ws.current_branch
             && self.graph == ws.graph
@@ -315,6 +327,8 @@ impl Workspace {
             return false;
         }
         self.status = snapshot.status;
+        self.operation = snapshot.operation;
+        self.merge_sides = snapshot.merge_sides;
         self.branches = snapshot.branches;
         self.current_branch = snapshot.current_branch;
         // Most-recent-first drives the sidebar listing and the chip order
@@ -613,17 +627,43 @@ impl Workspace {
         compute: impl FnOnce(&Repo) -> grit_core::Result<String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.request_files(
+            move |repo| {
+                let patch = compute(repo).map_err(|e| e.to_string())?;
+                DiffFile::parse(&patch).map(|files| (patch, files)).map_err(|e| e.to_string())
+            },
+            cx,
+        );
+    }
+
+    /// Conflict-marker view of an unresolved file: `DiffFile::parse_conflicts`
+    /// keeps the working file's line numbers and lets the component record
+    /// Accept Current / Incoming / Both choices.
+    pub(crate) fn request_conflict_diff(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.request_files(
+            move |repo| {
+                let text = repo.working_file_text(&path).map_err(|e| e.to_string())?;
+                let file = DiffFile::parse_conflicts(path.to_string_lossy(), &text)
+                    .map_err(|e| e.to_string())?;
+                Ok((text, vec![file]))
+            },
+            cx,
+        );
+    }
+
+    /// Shared landing for `request_diff` / `request_conflict_diff`: compute
+    /// `(identity text, files)` off the UI thread and install it when it
+    /// lands, dropping superseded results and identical content (installing
+    /// resets scroll, expansion and conflict choices).
+    fn request_files(
+        &mut self,
+        compute: impl FnOnce(&Repo) -> Result<(String, Vec<DiffFile>), String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
         let Some(repo) = self.repo.clone() else { return };
         self.diff_seq += 1;
         let seq = self.diff_seq;
-        let job = cx.background_spawn(async move {
-            compute(&repo).map(|patch| match DiffFile::parse(&patch) {
-                Ok(files) => Ok((patch, files)),
-                // `DiffFile::parse` has its own error type; the landing
-                // side only displays it.
-                Err(e) => Err(e.to_string()),
-            })
-        });
+        let job = cx.background_spawn(async move { compute(&repo) });
         cx.spawn(async move |this, cx| {
             let result = job.await;
             this.update(cx, |this, cx| {
@@ -631,19 +671,25 @@ impl Workspace {
                     return; // superseded request
                 }
                 match result {
-                    Ok(Ok((patch, files))) => {
-                        if this.diff_patch.as_deref() != Some(patch.as_str()) {
-                            this.diff.update(cx, |state, cx| state.set_files(files, cx));
-                            this.diff_patch = Some(patch);
+                    Ok((text, files)) => {
+                        if this.diff_patch.as_deref() != Some(text.as_str()) {
+                            this.diff.update(cx, |state, cx| {
+                                state.set_files(files, cx);
+                                // A modify/delete conflict has no marker
+                                // blocks, so its whole content is context and
+                                // would collapse into a blank-looking fold.
+                                if state.files().iter().all(|file| {
+                                    file.status() == DiffFileStatus::Conflicted
+                                        && file.conflicts().is_empty()
+                                }) {
+                                    state.expand_unchanged(cx);
+                                }
+                            });
+                            this.diff_patch = Some(text);
                             cx.notify();
                         }
                     }
-                    Err(e) => {
-                        this.error = Some(e.to_string().into());
-                        this.clear_diff(cx);
-                        cx.notify();
-                    }
-                    Ok(Err(msg)) => {
+                    Err(msg) => {
                         this.error = Some(msg.into());
                         this.clear_diff(cx);
                         cx.notify();

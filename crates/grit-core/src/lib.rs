@@ -22,6 +22,8 @@ pub use git2::Oid;
 pub use remote::RemoteOp;
 pub use repo::Repo;
 pub use stash::Stash;
+pub use status::ConflictSide;
 pub use status::FileEntry;
+pub use status::Operation;
 pub use status::Status;
 pub use tags::Tag;

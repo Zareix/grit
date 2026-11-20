@@ -2,6 +2,8 @@
 //! component (virtualized rows, line numbers, tree-sitter syntax colors,
 //! unified or side-by-side layout).
 
+use gpui_kit::prelude::FluentBuilder as _;
+
 use crate::workspace::Workspace;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -11,6 +13,7 @@ use gpui_kit::component::{
     h_flex, v_flex,
 };
 use gpui_kit::*;
+use grit_core::status::ConflictSide;
 
 /// Whether `path` has a viewable image extension (per GPUI's `img` list).
 pub(crate) fn is_viewable_image(path: &std::path::Path) -> bool {
@@ -38,6 +41,10 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
     // Image files show a live preview instead of the (binary) patch. The file
     // must exist: a deletion leaves no image to display.
     let is_image = is_viewable_image(path) && path.is_file();
+    // Modify/delete conflict: git keeps the surviving side without markers,
+    // so there is no in-file choice — the file itself is kept or dropped.
+    let modify_delete = ws.is_conflicted(path)
+        && ws.diff.read(cx).files().first().is_some_and(|file| file.conflicts().is_empty());
 
     let source = if ws.diff_from_commit {
         match &ws.selected_commit {
@@ -47,6 +54,8 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
             }
             None => "commit".to_string(),
         }
+    } else if ws.is_conflicted(path) {
+        "conflict".to_string()
     } else if ws.selected_staged {
         "staged".to_string()
     } else {
@@ -122,24 +131,86 @@ pub fn render(ws: &Workspace, cx: &mut Context<Workspace>) -> Div {
         // body: image preview for image files (no diff), otherwise the Diff
         // component, which owns its scrolling; do not nest another scrollable
         // region (unified rows, or two columns in split).
-        .child(div().flex_1().min_h_0().child(if is_image {
-            image_preview(path).into_any_element()
-        } else if has_files {
-            Diff::new(&ws.diff)
-                .hunk_separator(DiffHunkSeparator::LineInfo)
-                .soft_wrap(true)
-                .h_full()
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .justify_center()
-                .py_4()
-                .text_sm()
-                .text_color(muted)
-                .child("No changes")
-                .into_any_element()
-        }))
+        .child(
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .when(modify_delete, |this| this.child(delete_conflict_banner(ws, path, cx)))
+                .child(div().flex_1().min_h_0().child(if is_image {
+                    image_preview(path).into_any_element()
+                } else if has_files {
+                    Diff::new(&ws.diff)
+                        .hunk_separator(DiffHunkSeparator::LineInfo)
+                        .soft_wrap(true)
+                        .h_full()
+                        .into_any_element()
+                } else {
+                    div()
+                        .flex()
+                        .justify_center()
+                        .py_4()
+                        .text_sm()
+                        .text_color(muted)
+                        .child("No changes")
+                        .into_any_element()
+                })),
+        )
+}
+
+/// Header over a modify/delete conflict: the deleted side and the two
+/// resolutions (`git add` / `git rm`), since the diff offers no Accept
+/// buttons for a file without markers.
+fn delete_conflict_banner(
+    ws: &Workspace,
+    path: &std::path::Path,
+    cx: &mut Context<Workspace>,
+) -> Div {
+    let theme = cx.theme();
+    let (warning, muted) = (theme.warning, theme.muted_foreground);
+    // Names come from a merge (MERGE_HEAD); a rebase records no side names,
+    // so the banner stays neutral instead of guessing "this branch".
+    let detail = match (ws.conflict_deleted, &ws.merge_sides) {
+        (Some(ConflictSide::Ours), (Some(ours), Some(theirs))) => {
+            format!("Deleted in {ours}, modified in {theirs}.")
+        }
+        (Some(ConflictSide::Theirs), (Some(ours), Some(theirs))) => {
+            format!("Deleted in {theirs}, modified in {ours}.")
+        }
+        _ => "Deleted on one side, modified on the other.".to_string(),
+    };
+    let path = path.to_path_buf();
+
+    h_flex()
+        .flex_none()
+        .px_3()
+        .py_1p5()
+        .gap_2()
+        .items_center()
+        .justify_between()
+        .border_b_1()
+        .border_color(warning.opacity(0.4))
+        .bg(warning.opacity(0.12))
+        .child(div().min_w_0().text_size(px(11.)).text_color(muted).child(detail))
+        .child(
+            h_flex()
+                .gap_1()
+                .child(Button::new("keep-conflicted-file").xsmall().label("Keep file").on_click({
+                    let path = path.clone();
+                    cx.listener(move |this, _, _, cx| this.keep_conflicted_file(path.clone(), cx))
+                }))
+                .child(
+                    Button::new("delete-conflicted-file")
+                        .ghost()
+                        .xsmall()
+                        .label("Take deletion")
+                        .on_click({
+                            let path = path.clone();
+                            cx.listener(move |this, _, _, cx| {
+                                this.delete_conflicted_file(path.clone(), cx)
+                            })
+                        }),
+                ),
+        )
 }
 
 /// Centered, size-constrained preview of an image file on disk. GPUI's `img`

@@ -5,11 +5,30 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::*;
-use grit_core::{Oid, status::FileEntry};
+use grit_core::{
+    Oid,
+    status::{ChangeKind, FileEntry},
+};
 
 use crate::workspace::Workspace;
 
 impl Workspace {
+    /// Whether `path` is an unresolved staging entry (conflict markers in
+    /// the working tree).
+    pub(crate) fn is_conflicted(&self, path: &Path) -> bool {
+        self.status.unstaged.iter().any(|f| f.path == path && f.kind == ChangeKind::Conflicted)
+    }
+
+    /// Cache the deleted side of a modify/delete conflict for the diff
+    /// banner; `None` for content conflicts and clean paths.
+    fn sync_conflict_side(&mut self, path: &Path) {
+        self.conflict_deleted = self
+            .repo
+            .as_ref()
+            .filter(|_| self.is_conflicted(path))
+            .and_then(|repo| repo.deleted_side(path).ok().flatten());
+    }
+
     /// Re-read the selected file's diff after the status changed; drop the
     /// selection when the file disappeared from both sections. Runs on the
     /// UI thread after a snapshot lands; the diff computation itself is
@@ -49,15 +68,20 @@ impl Workspace {
         if present {
             self.selected_staged = staged;
             self.diff_from_commit = false;
-            self.request_diff(
-                {
-                    let sel = sel.clone();
-                    move |repo| {
-                        if staged { repo.diff_staged(&sel) } else { repo.diff_unstaged(&sel) }
-                    }
-                },
-                cx,
-            );
+            if self.is_conflicted(&sel) {
+                self.sync_conflict_side(&sel);
+                self.request_conflict_diff(sel, cx);
+            } else {
+                self.request_diff(
+                    {
+                        let sel = sel.clone();
+                        move |repo| {
+                            if staged { repo.diff_staged(&sel) } else { repo.diff_unstaged(&sel) }
+                        }
+                    },
+                    cx,
+                );
+            }
         } else {
             self.selected_path = None;
             self.selected_staged = false;
@@ -137,11 +161,80 @@ impl Workspace {
         self.selected_path = Some(path.clone());
         self.selected_staged = staged;
         self.diff_from_commit = false;
-        self.request_diff(
-            move |repo| if staged { repo.diff_staged(&path) } else { repo.diff_unstaged(&path) },
-            cx,
-        );
+        if self.is_conflicted(&path) {
+            self.sync_conflict_side(&path);
+            self.request_conflict_diff(path, cx);
+        } else {
+            self.request_diff(
+                move |repo| {
+                    if staged { repo.diff_staged(&path) } else { repo.diff_unstaged(&path) }
+                },
+                cx,
+            );
+        }
         cx.notify();
+    }
+
+    /// The `Diff` component records a conflict choice; once every conflict
+    /// in the file is decided, write the resolved text and stage it — the
+    /// `git add` that marks the conflict resolved for the operation.
+    pub(crate) fn apply_conflict_resolution(&mut self, path: SharedString, cx: &mut Context<Self>) {
+        let Some(text) = self.diff.read(cx).resolved_text(path.as_ref()) else { return };
+        let Some(repo) = self.repo.clone() else { return };
+        match repo.resolve_file(Path::new(path.as_ref()), &text) {
+            Ok(()) => {
+                self.info = Some(format!("Resolved {path}").into());
+                self.refresh(cx);
+            }
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Resolve a modify/delete conflict by keeping the surviving file (the
+    /// `git add` mark).
+    pub(crate) fn keep_conflicted_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        match repo.stage_file(&path) {
+            Ok(()) => {
+                self.info = Some(format!("Kept {}", path.to_string_lossy()).into());
+                self.refresh(cx);
+            }
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Resolve a modify/delete conflict by taking the deletion (`git rm`).
+    pub(crate) fn delete_conflicted_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else { return };
+        match repo.remove_conflicted(&path) {
+            Ok(()) => {
+                self.info = Some(format!("Deleted {}", path.to_string_lossy()).into());
+                self.refresh(cx);
+            }
+            Err(e) => {
+                self.error = Some(e.to_string().into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Finish the in-progress merge / rebase / pick through the git binary
+    /// (libgit2 would write a single-parent commit and leave the operation
+    /// open).
+    pub(crate) fn continue_operation(&mut self, cx: &mut Context<Self>) {
+        let Some(op) = self.operation else { return };
+        self.run_git_steps(op.label(), vec![op.continue_args()], cx);
+    }
+
+    pub(crate) fn abort_operation(&mut self, cx: &mut Context<Self>) {
+        let Some(op) = self.operation else { return };
+        self.run_git_steps(op.label(), vec![op.abort_args()], cx);
     }
 
     /// Click on a changed file inside the commit details view: show that
@@ -216,7 +309,12 @@ impl Workspace {
             return;
         }
 
-        let result = if self.amend {
+        let result = if self.operation.is_some() {
+            // A commit that finishes a merge must go through git: libgit2
+            // would write a single-parent commit and leave MERGE_HEAD (and
+            // the operation) behind.
+            repo.run_git(&["commit".to_string(), "-m".to_string(), message.clone()]).map(|_| ())
+        } else if self.amend {
             repo.commit_amend(&message).map(|_| ())
         } else {
             repo.commit(&message).map(|_| ())

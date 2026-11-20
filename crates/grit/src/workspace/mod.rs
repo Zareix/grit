@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use gpui_kit::component::{
     ActiveTheme as _, ResizableState,
-    diff::{DiffMode, DiffState},
+    diff::{DiffEvent, DiffMode, DiffState},
     h_resizable,
     input::{InputEvent, InputState},
     resizable_panel,
@@ -19,12 +19,12 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 use grit_core::{
-    Oid, Repo,
+    Oid, Operation, Repo,
     branch::{Branch, BranchType},
     commit::Commit,
     github::{GitHubCoords, PrInfo},
     graph::GraphData,
-    status::{FileEntry, Status},
+    status::{ConflictSide, FileEntry, Status},
     tags::Tag,
 };
 
@@ -226,6 +226,14 @@ pub struct Workspace {
     repo: Option<Repo>,
     /// Source of truth for counts / commit button state.
     status: Status,
+    /// Merge / rebase / cherry-pick / revert left mid-flight, if any.
+    operation: Option<Operation>,
+    /// `(ours, theirs)` branch names of an in-progress merge, for the
+    /// banners.
+    merge_sides: (Option<String>, Option<String>),
+    /// For the selected unmerged file: the side that deleted it, when one
+    /// did (modify/delete conflict — no markers to accept in the diff).
+    conflict_deleted: Option<ConflictSide>,
     message: Entity<InputState>,
     /// Inline "new branch" input, toggled by the + button.
     branch_input: Entity<InputState>,
@@ -372,6 +380,14 @@ impl Workspace {
         let center_layout = cx.new(|_| ResizableState::default());
         let bottom_layout = cx.new(|_| ResizableState::default());
         let diff = cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Unified));
+        // Conflicts are resolved by the component's Accept buttons; once the
+        // whole file is decided, its resolved text is written and staged.
+        let conflict_subscription = cx.subscribe(&diff, |this, _, event, cx| {
+            if let DiffEvent::ConflictResolved(path, _) = event {
+                let path = path.clone();
+                this.apply_conflict_resolution(path, cx);
+            }
+        });
         let remote_tree = cx.new(|cx| TreeState::new(cx).items(Vec::new()));
         // Track collapse/expand so rebuilds (every refresh) keep the user's
         // expansion state; items render expanded unless recorded here.
@@ -394,6 +410,9 @@ impl Workspace {
         let mut this = Self {
             repo: None,
             status: Status::default(),
+            operation: None,
+            merge_sides: (None, None),
+            conflict_deleted: None,
             message,
             branch_input,
             creating_branch: false,
@@ -445,6 +464,7 @@ impl Workspace {
                 name_enter_subscription,
                 tree_subscription,
                 activation_subscription,
+                conflict_subscription,
             ],
         };
         this.open(path, cx);
