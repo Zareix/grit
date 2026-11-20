@@ -68,9 +68,9 @@ just check       # fast cargo check
 - `Repository::commit` parents are `&[&Commit]`, not `&[&Object]`.
 - Untracked content in workdir diffs needs `opts.show_untracked_content(true)`.
 
-## GPUI Kit 0.7.3 gotchas (component sources live in `~/.cargo/registry/.../gpui-component-0.7.3`)
+## GPUI Kit 0.10.0 gotchas (component sources live in `~/.cargo/registry/.../gpui-component-0.10.0`)
 
-The app tracks the **published crates.io release** (`gpui-kit = "0.7.3"` in the
+The app tracks the **published crates.io release** (`gpui-kit = "0.10.0"` in the
 root `Cargo.toml`) — no `[patch.crates-io]` git pins anymore; the diff
 component ships in the published `gpui-component` since 0.7.2.
 
@@ -95,7 +95,7 @@ component ships in the published `gpui-component` since 0.7.2.
   `.agents/skills/gpui-kit` catalog may describe a newer ecosystem
   (`h_resizable(id)` takes no state argument — attach it with
   `.with_state(&Entity<ResizableState>)`). The `Diff` component exists in the
-  published 0.7.3 (`gpui_kit::component::diff`: `DiffFile::parse`,
+  published 0.10.0 (`gpui_kit::component::diff`: `DiffFile::parse`,
   `DiffState`, `DiffMode`).
 - `ResizablePanelGroup` always renders `size_full()` (both axes, not with
   Styled) — it must live inside a constrained wrapper
@@ -106,7 +106,7 @@ component ships in the published `gpui-component` since 0.7.2.
 - Dialogs: `window.open_dialog(cx, move |dialog, window, dialog_cx| …)`
   — real signature is `(cx, build)`, the builder closure is `move` and you
   **must name its params**: the site docs (all versions) show
-  `footer(|…| vec![Button])` as a closure factory, but 0.7.3 source takes
+  `footer(|…| vec![Button])` as a closure factory, but 0.10.0 source takes
   `footer(impl IntoElement)` and never renders `button_props` buttons (that's
   AlertDialog-only). Build the footer yourself:
   `DialogFooter::new().child(Button…)` + `window.close_dialog(cx)`.
