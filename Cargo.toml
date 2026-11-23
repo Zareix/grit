@@ -17,7 +17,7 @@ thiserror = "2"
 gpui-kit = "0.10.0"
 # Perf HUD (FRAME/P95/DROP/INV, CPU/GPU/MEM) — rendered only when
 # GRIT_FPS=1, so it costs nothing in normal runs.
-gpui-fps = "0.10.0"
+gpui-fps = "0.11.0"
 
 # session persistence
 serde = { version = "1", features = ["derive"] }
